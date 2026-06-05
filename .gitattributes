@@ -1,0 +1,4 @@
+# Normalize line endings to LF across platforms (Windows dev -> Mac dev)
+* text=auto eol=lf
+*.png binary
+*.ico binary

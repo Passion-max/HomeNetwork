@@ -1,0 +1,24 @@
+# dependencies / build
+node_modules/
+web/node_modules/
+web/.next/
+web/out/
+
+# secrets & local config
+.env
+.env.local
+web/.env.local
+
+# database (history is machine-local; recreated on first run)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.sqlite
+
+# logs & scratch
+*.log
+_probe_*
+
+# OS noise
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+{
+  "name": "MTN FibreX · Control",
+  "short_name": "FibreX",
+  "description": "MTN FibreX network telemetry & control",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#08080a",
+  "theme_color": "#08080a",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
