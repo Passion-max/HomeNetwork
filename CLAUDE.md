@@ -52,6 +52,11 @@ Useful scripts: `npm run probe` (test router login), `node src/discover.mjs <men
 - `web/app/components/Dashboard.jsx` — main UI (tabs, gauge, speed test, etc.).
 
 ## Critical gotchas (don't reintroduce)
+- **Run only ONE collector at a time.** The F670L `user` account is effectively
+  single-session; two backends polling it (e.g. an old box + a new one) steal each
+  other's session → every poll `SessionTimeout` → empty snapshots showing
+  "Internet Down / 0 devices" (while history/usage still render). Can also trip the
+  account lockout. Symptom fix: stop the other collector, wait a few min to recover.
 - **Usage totals MUST use the per-device/per-port method** (`usageSince` /
   `sumUsageSince`): WiFi clients' RX=download/TX=upload; wired = each LAN port
   (out=download, in=upload); reset-aware. **Never diff the router's *combined*
