@@ -2,6 +2,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { accumulate, backfill } from "./ledger.mjs";
 
 const DB_PATH = process.env.DB_PATH ?? "data/homenetwork.db";
 
@@ -52,6 +53,27 @@ db.exec(`
     in_bytes  INTEGER, out_bytes INTEGER,
     PRIMARY KEY (ts, port)
   );
+
+  -- Unified usage ledger (see ledger.mjs): authoritative Today/Month/All-time.
+  CREATE TABLE IF NOT EXISTS usage_daily (
+    day        TEXT NOT NULL,            -- 'YYYY-MM-DD' (local tz)
+    scope      TEXT NOT NULL,            -- mac (wifi) | 'DEV.ETH.IFx' (port) | '__unattributed__'
+    kind       TEXT,                     -- 'wifi' | 'port' | 'recon'
+    down_bytes INTEGER NOT NULL DEFAULT 0,
+    up_bytes   INTEGER NOT NULL DEFAULT 0,
+    updated_ts INTEGER,
+    PRIMARY KEY (day, scope)
+  );
+
+  -- Last cumulative counter seen per scope, for reset-aware delta computation.
+  CREATE TABLE IF NOT EXISTS scope_state (
+    scope     TEXT PRIMARY KEY,
+    kind      TEXT,
+    last_down INTEGER, last_up INTEGER, last_ts INTEGER
+  );
+
+  -- Small key/value store for one-time flags (e.g. backfill done).
+  CREATE TABLE IF NOT EXISTS meta ( key TEXT PRIMARY KEY, value TEXT );
 `);
 
 // Migrations for pre-existing databases (each no-ops if the column already exists).
@@ -132,6 +154,8 @@ export function saveSnapshot({ ts, system, wan, devices, ports, bootUsage = {} }
         in_bytes: p.in_bytes ?? null, out_bytes: p.out_bytes ?? null,
       });
     }
+    // Fold this cycle's cumulative counters into the unified usage ledger.
+    accumulate(db, { ts, devices, ports });
     db.exec("COMMIT");
   } catch (e) {
     db.exec("ROLLBACK");
@@ -143,6 +167,14 @@ const stmtRename = db.prepare("UPDATE device SET custom_name = ? WHERE mac = ?")
 /** Set (or clear) a user-friendly name for a device. */
 export function setDeviceName(mac, name) {
   stmtRename.run(name && name.trim() ? name.trim() : null, mac);
+}
+
+// One-time: rebuild the ledger from existing raw samples with the fixed
+// bounded-delta logic (removes the historical inflation). No-op after first run.
+try {
+  if (backfill(db)) console.log("[ledger] backfilled usage_daily from history");
+} catch (e) {
+  console.error("[ledger] backfill failed:", e.message);
 }
 
 export { db };

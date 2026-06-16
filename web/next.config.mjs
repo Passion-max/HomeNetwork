@@ -12,7 +12,7 @@ const nextConfig = EXPORT
       images: { unoptimized: true },
     }
   : {
-      allowedDevOrigins: ["192.168.1.6", "localhost"],
+      allowedDevOrigins: ["192.168.1.2", "localhost"],
       async rewrites() {
         return [{ source: "/api/:path*", destination: `${API}/api/:path*` }];
       },

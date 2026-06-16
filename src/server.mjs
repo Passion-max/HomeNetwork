@@ -21,10 +21,17 @@ const INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 15000);
 
 const sseClients = new Set();
 
+// Collector health — surfaced on /api/state so the UI can tell live from stale
+// (a router/VPN outage used to freeze the dashboard silently behind a "LIVE" badge).
+const health = { last_ok_ts: null, last_error: null, consecutive_failures: 0 };
+
 async function tick() {
   try {
     const data = await pollOnce();
     saveSnapshot(data);
+    health.last_ok_ts = Date.now();
+    health.last_error = null;
+    health.consecutive_failures = 0;
     const state = getState();
     const payload = `data: ${JSON.stringify(state)}\n\n`;
     for (const res of sseClients) res.write(payload);
@@ -33,8 +40,24 @@ async function tick() {
         `↓${(state.totals.down_kbps / 1000).toFixed(1)} ↑${(state.totals.up_kbps / 1000).toFixed(1)} Mbps   `,
     );
   } catch (e) {
-    console.error("\npoll error:", e.message);
+    health.consecutive_failures += 1;
+    health.last_error = e.message;
+    console.error(`\npoll error (#${health.consecutive_failures}):`, e.message);
   }
+}
+
+/** Collector health block merged into /api/state, derived from data freshness. */
+function collectorHealth(state) {
+  const now = Date.now();
+  const age_s = state?.ts ? Math.round((now - state.ts) / 1000) : null;
+  const healthy = age_s != null && age_s < (INTERVAL_MS * 3) / 1000;
+  return {
+    healthy,
+    age_s,
+    last_ok_ts: health.last_ok_ts,
+    consecutive_failures: health.consecutive_failures,
+    last_error: health.last_error,
+  };
 }
 
 const json = (res, body, status = 200) => {
@@ -90,7 +113,11 @@ const server = createServer(async (req, res) => {
   }
 
   try {
-    if (url.pathname === "/api/state") return json(res, getState() ?? {});
+    if (url.pathname === "/api/state") {
+      const state = getState() ?? {};
+      state.collector = collectorHealth(state);
+      return json(res, state);
+    }
 
     if (url.pathname === "/api/history") {
       const minutes = Number(url.searchParams.get("minutes") ?? 60);

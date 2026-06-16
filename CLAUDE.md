@@ -43,7 +43,8 @@ Useful scripts: `npm run probe` (test router login), `node src/discover.mjs <men
 (Android/Termux) and `docs/MACOS.md` for Mac specifics.
 
 > When changing the LAN IP for phone access in dev, update `allowedDevOrigins` in
-> `web/next.config.mjs` (currently hard-coded to the old Windows box's `192.168.1.6`).
+> `web/next.config.mjs` (currently set to this Mac's `192.168.1.2`). A change here
+> needs a **dev-server restart** to take effect.
 
 ## Key files
 - `src/router/client.mjs` — F670L login handshake + XML parsing (see comments).
@@ -62,6 +63,18 @@ Useful scripts: `npm run probe` (test router login), `node src/discover.mjs <men
   from their LAN port (`LAN3` → `DEV.ETH.IF3`).
 - F670L data pages need a **`menuView` "navigate" request before `menuData`**, else
   `SessionTimeout`. Capture the **last** `SID=` cookie after login.
+- **You MUST `GET /` once right after login** (`client.mjs` does this). The login
+  response returns `login_need_refresh: true`, meaning the session is only
+  *half-activated*; the real browser reloads root, and that GET finalizes it
+  server-side. Skip it and login still "succeeds" (you get a SID cookie) but every
+  `menuView` returns **404** → every `menuData` returns **`SessionTimeout`** → the
+  poller stores all-null snapshots forever. This bit us after firmware
+  V9.0.11P5N17: symptoms look like a changed API, but the tags/objects are
+  unchanged — only the missing GET / was at fault. (June 2026.)
+- Router allows **one `user` session at a time**: a new login bumps the previous
+  one. So the poller and a browser logged into the router UI fight each other
+  (the UI logs out within seconds). Stop the poller while inspecting the router by
+  hand.
 - **CSS `var()` does NOT work in SVG presentation attributes** — use literal hex.
 - **Next 16** blocks cross-origin dev resources → set `allowedDevOrigins` for phone
   access in dev.
