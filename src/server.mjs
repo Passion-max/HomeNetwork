@@ -6,8 +6,7 @@ import { existsSync } from "node:fs";
 import { join, normalize, extname } from "node:path";
 import { pollOnce } from "./poller.mjs";
 import { saveSnapshot } from "./db.mjs";
-import { getState, getThroughputHistory, getConsumption, getDeviceHistory } from "./queries.mjs";
-import { setDeviceName } from "./db.mjs";
+import { store } from "./store/index.mjs";
 import {
   authEnabled, authConfig, verifyPassword, issueSession, sessionFromReq, sessionCookie, clearCookie,
 } from "./auth.mjs";
@@ -35,7 +34,7 @@ async function tick() {
     health.last_ok_ts = Date.now();
     health.last_error = null;
     health.consecutive_failures = 0;
-    const state = getState();
+    const state = store.getState();
     const payload = `data: ${JSON.stringify(state)}\n\n`;
     for (const res of sseClients) res.write(payload);
     process.stdout.write(
@@ -155,7 +154,7 @@ const server = createServer(async (req, res) => {
 
   try {
     if (url.pathname === "/api/state") {
-      const state = getState() ?? {};
+      const state = store.getState() ?? {};
       state.collector = collectorHealth(state);
       state.auth_enabled = authEnabled();
       return json(res, state);
@@ -163,20 +162,20 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/history") {
       const minutes = Number(url.searchParams.get("minutes") ?? 60);
-      return json(res, getThroughputHistory(minutes));
+      return json(res, store.getHistory(minutes));
     }
 
-    if (url.pathname === "/api/consumption") return json(res, getConsumption());
+    if (url.pathname === "/api/consumption") return json(res, store.getConsumption());
 
     if (url.pathname === "/api/device-history") {
       const mac = url.searchParams.get("mac");
       const minutes = Number(url.searchParams.get("minutes") ?? 30);
-      return json(res, mac ? getDeviceHistory(mac, minutes) : []);
+      return json(res, mac ? store.getDeviceHistory(mac, minutes) : []);
     }
 
     if (url.pathname === "/api/device/rename" && req.method === "POST") {
       const { mac, name } = JSON.parse((await readBody(req)) || "{}");
-      if (mac) setDeviceName(mac, name);
+      if (mac) store.setDeviceName(mac, name);
       return json(res, { ok: !!mac });
     }
   } catch (e) {
@@ -190,7 +189,7 @@ const server = createServer(async (req, res) => {
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
-    const s = getState();
+    const s = store.getState();
     if (s) res.write(`data: ${JSON.stringify(s)}\n\n`);
     sseClients.add(res);
     req.on("close", () => sseClients.delete(res));
