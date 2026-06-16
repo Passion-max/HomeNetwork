@@ -2,6 +2,7 @@
 // cumulative usage (Today/Month/All-time, per-device) comes from the unified ledger.
 import { db } from "./db.mjs";
 import { dayKey } from "./ledger.mjs";
+import { aggregateConsumption, lanToIf } from "./usage.mjs";
 
 const twoLatestTs = () =>
   db.prepare("SELECT ts FROM snapshot ORDER BY ts DESC LIMIT 2").all().map((r) => r.ts);
@@ -9,12 +10,6 @@ const twoLatestTs = () =>
 /** Rate in kbps between two cumulative byte readings. */
 const kbps = (cur, prev, dtMs) =>
   cur == null || prev == null || !dtMs || cur < prev ? 0 : Math.round(((cur - prev) * 8) / (dtMs / 1000) / 1000);
-
-/** "LAN3" -> "DEV.ETH.IF3" so we can attribute a wired port's traffic to its device. */
-const lanToIf = (port) => {
-  const n = /(\d+)/.exec(port ?? "")?.[1];
-  return n ? `DEV.ETH.IF${n}` : null;
-};
 
 /** Today's usage per scope (mac or 'DEV.ETH.IFx') from the unified ledger. */
 function todayUsageByScope() {
@@ -184,39 +179,8 @@ export function getConsumption() {
   const today = dayKey(Date.now());
   const month = today.slice(0, 7); // 'YYYY-MM'
   const rows = db.prepare("SELECT day, scope, kind, down_bytes, up_bytes FROM usage_daily").all();
-
-  const z = () => ({ down: 0, up: 0 });
-  const add = (o, r) => { o.down += r.down_bytes; o.up += r.up_bytes; };
-  const fin = (o) => ({ down_bytes: o.down, up_bytes: o.up, total_bytes: o.down + o.up });
-
-  const win = { today: z(), month: z(), all: z() };
-  const byScope = {};
-  const unatt = z();
-
-  for (const r of rows) {
-    if (r.scope === "__unattributed__") { add(unatt, r); continue; }
-    add(win.all, r);
-    if (r.day === today) add(win.today, r);
-    if (r.day.slice(0, 7) === month) add(win.month, r);
-    const e = (byScope[r.scope] ??= { down: 0, up: 0, kind: r.kind });
-    e.down += r.down_bytes; e.up += r.up_bytes;
-  }
-
-  // Map scopes (mac / 'DEV.ETH.IFx') to friendly device names + connection type.
-  const nameForScope = {}, typeForScope = {};
-  for (const d of db.prepare("SELECT mac, custom_name, hostname, conn_type, port FROM device").all()) {
-    const name = d.custom_name || d.hostname || d.mac;
-    if (d.conn_type === "wifi") { nameForScope[d.mac] = name; typeForScope[d.mac] = "wifi"; }
-    else { const sc = lanToIf(d.port); if (sc) { nameForScope[sc] = name; typeForScope[sc] = "lan"; } }
-  }
-  const devices = Object.entries(byScope)
-    .map(([scope, v]) => ({
-      name: nameForScope[scope] || scope,
-      conn_type: typeForScope[scope] || (v.kind === "wifi" ? "wifi" : "lan"),
-      down_bytes: v.down, up_bytes: v.up, total_bytes: v.down + v.up,
-    }))
-    .filter((d) => d.total_bytes > 0)
-    .sort((a, b) => b.total_bytes - a.total_bytes);
+  const deviceRows = db.prepare("SELECT mac, custom_name, hostname, conn_type, port FROM device").all();
+  const agg = aggregateConsumption(rows, deviceRows, { today, month });
 
   const since_ts = db.prepare("SELECT MIN(ts) m FROM snapshot").get()?.m ?? null;
 
@@ -240,15 +204,10 @@ export function getConsumption() {
     : null;
 
   return {
-    total_bytes: win.all.down + win.all.up,
-    down_bytes: win.all.down,
-    up_bytes: win.all.up,
-    unattributed: fin(unatt),
+    ...agg,
     since_ts,
     since_boot,
     uptime_s: since_boot?.uptime_s ?? null,
-    windows: { today: fin(win.today), month: fin(win.month), all: fin(win.all) },
-    devices,
   };
 }
 

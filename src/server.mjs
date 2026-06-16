@@ -7,6 +7,7 @@ import { join, normalize, extname } from "node:path";
 import { pollOnce } from "./poller.mjs";
 import { saveSnapshot } from "./db.mjs";
 import { store } from "./store/index.mjs";
+import { startSync, syncEnabled } from "./sync/supabase.mjs";
 import {
   authEnabled, authConfig, verifyPassword, issueSession, sessionFromReq, sessionCookie, clearCookie,
 } from "./auth.mjs";
@@ -34,7 +35,7 @@ async function tick() {
     health.last_ok_ts = Date.now();
     health.last_error = null;
     health.consecutive_failures = 0;
-    const state = store.getState();
+    const state = await store.getState();
     const payload = `data: ${JSON.stringify(state)}\n\n`;
     for (const res of sseClients) res.write(payload);
     process.stdout.write(
@@ -154,7 +155,7 @@ const server = createServer(async (req, res) => {
 
   try {
     if (url.pathname === "/api/state") {
-      const state = store.getState() ?? {};
+      const state = (await store.getState()) ?? {};
       state.collector = collectorHealth(state);
       state.auth_enabled = authEnabled();
       return json(res, state);
@@ -162,20 +163,20 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/history") {
       const minutes = Number(url.searchParams.get("minutes") ?? 60);
-      return json(res, store.getHistory(minutes));
+      return json(res, await store.getHistory(minutes));
     }
 
-    if (url.pathname === "/api/consumption") return json(res, store.getConsumption());
+    if (url.pathname === "/api/consumption") return json(res, await store.getConsumption());
 
     if (url.pathname === "/api/device-history") {
       const mac = url.searchParams.get("mac");
       const minutes = Number(url.searchParams.get("minutes") ?? 30);
-      return json(res, mac ? store.getDeviceHistory(mac, minutes) : []);
+      return json(res, mac ? await store.getDeviceHistory(mac, minutes) : []);
     }
 
     if (url.pathname === "/api/device/rename" && req.method === "POST") {
       const { mac, name } = JSON.parse((await readBody(req)) || "{}");
-      if (mac) store.setDeviceName(mac, name);
+      if (mac) await store.setDeviceName(mac, name);
       return json(res, { ok: !!mac });
     }
   } catch (e) {
@@ -189,7 +190,7 @@ const server = createServer(async (req, res) => {
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
-    const s = store.getState();
+    const s = await store.getState();
     if (s) res.write(`data: ${JSON.stringify(s)}\n\n`);
     sseClients.add(res);
     req.on("close", () => sseClients.delete(res));
@@ -208,6 +209,8 @@ server.listen(PORT, () => {
   );
   if (authEnabled()) console.log("auth: ENABLED (single household login)");
   else console.warn("⚠ auth DISABLED — API is open (LAN only). Run `npm run set-password` and set the .env lines to enable login.");
+  if (startSync()) console.log("cloud sync: ON (mirroring to Supabase)");
+  else if (!syncEnabled()) console.log("cloud sync: off (set SUPABASE_URL/SERVICE_KEY/HOME_ID to enable)");
   tick();
   setInterval(tick, INTERVAL_MS);
 });

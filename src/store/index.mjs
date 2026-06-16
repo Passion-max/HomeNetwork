@@ -1,9 +1,9 @@
 // Unified data-access seam. The API (server.mjs) talks to `store.*` and does not
-// care whether reads come from local SQLite (default) or a cloud mirror.
+// care whether reads come from local SQLite (default) or the Supabase mirror.
 //
-// Phase 4 will add a cloud reader (Supabase) selected via env, e.g.:
-//   export const store = process.env.STORE === "cloud" ? cloudStore : localStore;
-// For now the home collector always reads/writes locally.
-import { localStore } from "./local.mjs";
-
-export const store = localStore;
+// Dynamic import so that cloud mode never loads the local store (and thus never
+// loads node:sqlite) — important for a serverless/edge hosted reader.
+const useCloud = process.env.STORE === "cloud";
+export const store = useCloud
+  ? (await import("./cloud.mjs")).cloudStore
+  : (await import("./local.mjs")).localStore;
