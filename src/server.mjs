@@ -8,6 +8,9 @@ import { pollOnce } from "./poller.mjs";
 import { saveSnapshot } from "./db.mjs";
 import { getState, getThroughputHistory, getConsumption, getDeviceHistory } from "./queries.mjs";
 import { setDeviceName } from "./db.mjs";
+import {
+  authEnabled, authConfig, verifyPassword, issueSession, sessionFromReq, sessionCookie, clearCookie,
+} from "./auth.mjs";
 
 const readBody = (req) =>
   new Promise((resolve) => {
@@ -60,13 +63,25 @@ function collectorHealth(state) {
   };
 }
 
-const json = (res, body, status = 200) => {
-  res.writeHead(status, {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-  });
+const json = (res, body, status = 200, headers = {}) => {
+  res.writeHead(status, { "Content-Type": "application/json", ...headers });
   res.end(JSON.stringify(body));
 };
+
+// Simple in-memory brute-force guard for the login endpoint (per client IP).
+const loginFails = new Map(); // ip -> { n, ts }
+const MAX_FAILS = 10;
+const FAIL_WINDOW_MS = 15 * 60 * 1000;
+function loginRateLimited(ip) {
+  const e = loginFails.get(ip);
+  if (!e || Date.now() - e.ts > FAIL_WINDOW_MS) return false;
+  return e.n >= MAX_FAILS;
+}
+function noteLoginFail(ip) {
+  const e = loginFails.get(ip);
+  if (!e || Date.now() - e.ts > FAIL_WINDOW_MS) loginFails.set(ip, { n: 1, ts: Date.now() });
+  else e.n += 1;
+}
 
 // Static frontend (the exported Next site). Present only in single-process /
 // production mode; in dev the Next server handles the UI instead.
@@ -102,20 +117,47 @@ async function serveStatic(res, pathname) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
-  // CORS preflight (rename POST from the browser)
   if (req.method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    });
+    // Same-origin in prod (UI + API on one port) and in dev (Next proxies /api),
+    // so no cross-origin CORS headers are issued.
+    res.writeHead(204);
     return res.end();
+  }
+
+  const session = authEnabled() ? sessionFromReq(req) : { username: "open" };
+
+  // Public auth endpoints + status (do not require a session).
+  if (url.pathname === "/api/me") {
+    return json(res, { auth_enabled: authEnabled(), authenticated: !!session, username: session?.username ?? null });
+  }
+  if (url.pathname === "/api/login" && req.method === "POST") {
+    const ip = req.socket.remoteAddress ?? "?";
+    if (loginRateLimited(ip)) return json(res, { error: "too many attempts — wait a few minutes" }, 429);
+    let body = {};
+    try { body = JSON.parse((await readBody(req)) || "{}"); } catch {}
+    const c = authConfig();
+    const ok = body.username === c.username && verifyPassword(body.password, c.passwordHash);
+    if (!ok) {
+      noteLoginFail(ip);
+      return json(res, { error: "invalid username or password" }, 401);
+    }
+    loginFails.delete(ip);
+    return json(res, { ok: true, username: c.username }, 200, { "Set-Cookie": sessionCookie(issueSession(c.username)) });
+  }
+  if (url.pathname === "/api/logout" && req.method === "POST") {
+    return json(res, { ok: true }, 200, { "Set-Cookie": clearCookie() });
+  }
+
+  // Everything else under /api requires a valid session when auth is enabled.
+  if (url.pathname.startsWith("/api/") && authEnabled() && !session) {
+    return json(res, { error: "unauthorized" }, 401);
   }
 
   try {
     if (url.pathname === "/api/state") {
       const state = getState() ?? {};
       state.collector = collectorHealth(state);
+      state.auth_enabled = authEnabled();
       return json(res, state);
     }
 
@@ -147,7 +189,6 @@ const server = createServer(async (req, res) => {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
-      "Access-Control-Allow-Origin": "*",
     });
     const s = getState();
     if (s) res.write(`data: ${JSON.stringify(s)}\n\n`);
@@ -166,6 +207,8 @@ server.listen(PORT, () => {
     `${SERVE_WEB ? "Dashboard + API" : "API"} on http://localhost:${PORT}` +
       `${SERVE_WEB ? " (serving web/out)" : ""}  ·  polling every ${INTERVAL_MS / 1000}s`,
   );
+  if (authEnabled()) console.log("auth: ENABLED (single household login)");
+  else console.warn("⚠ auth DISABLED — API is open (LAN only). Run `npm run set-password` and set the .env lines to enable login.");
   tick();
   setInterval(tick, INTERVAL_MS);
 });

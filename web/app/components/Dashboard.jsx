@@ -7,6 +7,7 @@ import Sparkline from "./Sparkline";
 import BottomNav from "./BottomNav";
 import DeviceDetail from "./DeviceDetail";
 import SpeedTest from "./SpeedTest";
+import Login from "./Login";
 
 export default function Dashboard() {
   const [state, setState] = useState(null);
@@ -16,21 +17,31 @@ export default function Dashboard() {
   const [selected, setSelected] = useState(null);
   const [rangeMin, setRangeMin] = useState(30);
   const [live, setLive] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0); // bump to re-pull after rename
+  const [authRequired, setAuthRequired] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0); // bump to re-pull after rename/login
 
   // Live state — same-origin polling (works on PC and phone alike).
   useEffect(() => {
     let stop = false;
     const poll = async () => {
       try {
-        const r = await fetch("/api/state").then((x) => x.json());
-        if (!stop && r?.ts) { setState(r); setLive(true); }
+        const r = await fetch("/api/state");
+        if (r.status === 401) { if (!stop) { setAuthRequired(true); setLive(false); } return; }
+        const data = await r.json();
+        if (!stop && data?.ts) { setAuthRequired(false); setState(data); setLive(true); }
       } catch { if (!stop) setLive(false); }
     };
     poll();
     const t = setInterval(poll, 5000);
     return () => { stop = true; clearInterval(t); };
   }, [refreshKey]);
+
+  const logout = async () => {
+    await fetch("/api/logout", { method: "POST" }).catch(() => {});
+    setState(null);
+    setLive(false);
+    setAuthRequired(true);
+  };
 
   useEffect(() => {
     const load = () =>
@@ -49,6 +60,10 @@ export default function Dashboard() {
     const t = setInterval(load, 30000);
     return () => clearInterval(t);
   }, [refreshKey]);
+
+  if (authRequired) {
+    return <Login onSuccess={() => { setAuthRequired(false); setRefreshKey((k) => k + 1); }} />;
+  }
 
   if (!state) {
     return <div className="loading"><div className="spin" /><span>linking to gateway…</span></div>;
@@ -78,9 +93,14 @@ export default function Dashboard() {
               <span className="brand-net"><WifiGlyph />{state.network}</span>
             )}
           </div>
-          <div className="livechip" title={col.last_error || ""}>
-            <span className={`dot ${healthy ? "live" : "off"}`} />
-            {chipLabel}
+          <div className="topbar-right">
+            <div className="livechip" title={col.last_error || ""}>
+              <span className={`dot ${healthy ? "live" : "off"}`} />
+              {chipLabel}
+            </div>
+            {state.auth_enabled && (
+              <button className="logout-btn" onClick={logout} title="Sign out" aria-label="Sign out">⏻</button>
+            )}
           </div>
         </header>
 
