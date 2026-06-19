@@ -1,5 +1,6 @@
 "use client";
 import { useState } from "react";
+import { api, CLOUD } from "../lib/data";
 
 export default function Login({ onSuccess }) {
   const [username, setUsername] = useState("");
@@ -13,14 +14,9 @@ export default function Login({ onSuccess }) {
     setBusy(true);
     setErr("");
     try {
-      const r = await fetch("/api/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      if (r.ok) return onSuccess();
-      const j = await r.json().catch(() => ({}));
-      setErr(r.status === 429 ? "Too many attempts — wait a few minutes." : j.error || "Invalid credentials");
+      const res = await api.login(username.trim(), password);
+      if (res.ok) return onSuccess();
+      setErr(res.status === 429 ? "Too many attempts — wait a few minutes." : res.error || "Invalid credentials");
     } catch {
       setErr("Can't reach the dashboard server.");
     } finally {
@@ -39,7 +35,8 @@ export default function Login({ onSuccess }) {
         <p className="login-sub">Sign in to your network</p>
         <input
           className="login-in"
-          placeholder="Username"
+          type={CLOUD ? "email" : "text"}
+          placeholder={CLOUD ? "Email" : "Username"}
           autoComplete="username"
           value={username}
           onChange={(e) => setUsername(e.target.value)}

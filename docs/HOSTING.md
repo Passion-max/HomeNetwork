@@ -49,22 +49,35 @@ collector — never ship it to the browser.
 
 ## 3. Deploy the hosted dashboard on Vercel
 
-The hosted reader serves the same UI but reads the Supabase mirror instead of the
-local router. Two supported approaches:
+The frontend is one codebase, two modes (see `web/app/lib/data.js`): with the
+`NEXT_PUBLIC_SUPABASE_*` env vars set it logs in via **Supabase Auth** and reads the
+mirror **directly from the browser** with the **anon** key — Row-Level Security
+(already in the schema) restricts each user to their own `home_id`. No server secret
+ever reaches the browser. Without those vars it uses the local `/api/*` backend, as
+the home install does.
 
-**A. Browser-direct (simplest, recommended).** The Vercel app uses Supabase Auth for
-login and the **anon** key in the browser; Row-Level Security (already in the schema)
-restricts each user to their own `home_id`. No server secrets in the frontend. This
-is a small frontend variant (swap the `/api/*` fetches for `supabase-js` queries) —
-wire it at deploy time.
+1. Create your login user: Supabase → **Authentication → Users → Add user** (email +
+   password). Copy its **User UID**.
+2. Grant that user your home (SQL editor):
+   ```sql
+   insert into home_member (home_id, user_id, role)
+   values ('home-1', '<the-User-UID>', 'admin');
+   ```
+3. Get the **anon / publishable** key: Settings → API (the *public* key, NOT
+   service_role).
+4. On Vercel: **Import** the GitHub repo → set **Root Directory = `web`** → add
+   Environment Variables:
+   ```
+   NEXT_PUBLIC_SUPABASE_URL = https://<project>.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY = <anon/publishable key>
+   ```
+   Deploy. Visiting the URL shows the login screen; sign in with the user from step 1.
 
-**B. Server-side reader.** Run the Node reader with `STORE=cloud` (uses
-`src/store/cloud.mjs`, which imports no SQLite) behind the existing API, and point the
-unchanged frontend at it. Good for a VPS/container; on Vercel it means thin API routes
-(a non-static build). The `service_role` key stays server-side only.
+To test cloud mode locally, put those two `NEXT_PUBLIC_*` vars in `web/.env.local`
+and run `npm run dev` in `web/`.
 
-Either way, set `AUTH_SECURE_COOKIE=1` (approach B) or rely on Supabase Auth
-(approach A) since the hosted site is HTTPS.
+> Hosted rename + per-device history are read-only/empty by design (renames would be
+> overwritten by the home sync; high-frequency samples aren't mirrored).
 
 ## Notes / limits (current scaffold)
 - Per-device history sparklines aren't mirrored (high-frequency samples stay local);

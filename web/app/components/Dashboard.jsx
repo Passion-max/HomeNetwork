@@ -8,6 +8,7 @@ import BottomNav from "./BottomNav";
 import DeviceDetail from "./DeviceDetail";
 import SpeedTest from "./SpeedTest";
 import Login from "./Login";
+import { api, CLOUD } from "../lib/data";
 
 export default function Dashboard() {
   const [state, setState] = useState(null);
@@ -25,11 +26,12 @@ export default function Dashboard() {
     let stop = false;
     const poll = async () => {
       try {
-        const r = await fetch("/api/state");
-        if (r.status === 401) { if (!stop) { setAuthRequired(true); setLive(false); } return; }
-        const data = await r.json();
+        const data = await api.getState();
         if (!stop && data?.ts) { setAuthRequired(false); setState(data); setLive(true); }
-      } catch { if (!stop) setLive(false); }
+        else if (!stop) setLive(false);
+      } catch (e) {
+        if (!stop) { if (e?.code === 401) { setAuthRequired(true); } setLive(false); }
+      }
     };
     poll();
     const t = setInterval(poll, 5000);
@@ -37,7 +39,7 @@ export default function Dashboard() {
   }, [refreshKey]);
 
   const logout = async () => {
-    await fetch("/api/logout", { method: "POST" }).catch(() => {});
+    await api.logout().catch(() => {});
     setState(null);
     setLive(false);
     setAuthRequired(true);
@@ -45,8 +47,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     const load = () =>
-      fetch(`/api/history?minutes=${rangeMin}`)
-        .then((r) => r.json())
+      api.getHistory(rangeMin)
         .then((d) => setHistory(Array.isArray(d) ? d : []))
         .catch(() => {});
     load();
@@ -55,7 +56,7 @@ export default function Dashboard() {
   }, [rangeMin]);
 
   useEffect(() => {
-    const load = () => fetch("/api/consumption").then((r) => r.json()).then(setConsumption).catch(() => {});
+    const load = () => api.getConsumption().then(setConsumption).catch(() => {});
     load();
     const t = setInterval(load, 30000);
     return () => clearInterval(t);
@@ -71,7 +72,9 @@ export default function Dashboard() {
 
   // Freshness comes from the collector, not from "did the fetch succeed" — a
   // reachable server can still be serving a stale snapshot (router/VPN outage).
-  const col = state.collector || {};
+  // The local backend sends a `collector` block; the hosted mirror has none, so
+  // derive freshness from the data's own timestamp (how stale the mirror is).
+  const col = state.collector || (state.ts ? { age_s: Math.round((Date.now() - state.ts) / 1000), healthy: Date.now() - state.ts < 120000 } : {});
   const healthy = live && col.healthy;
   const staleLabel =
     col.age_s == null ? "offline"
@@ -98,7 +101,7 @@ export default function Dashboard() {
               <span className={`dot ${healthy ? "live" : "off"}`} />
               {chipLabel}
             </div>
-            {state.auth_enabled && (
+            {(state.auth_enabled || CLOUD) && (
               <button className="logout-btn" onClick={logout} title="Sign out" aria-label="Sign out">⏻</button>
             )}
           </div>

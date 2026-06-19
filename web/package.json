@@ -9,6 +9,7 @@
     "start": "next start -p 3010"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.108.2",
     "next": "^16.2.6",
     "react": "19.0.0",
     "react-dom": "19.0.0"

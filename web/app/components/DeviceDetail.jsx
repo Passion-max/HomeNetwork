@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Sparkline from "./Sparkline";
 import Signal from "./Signal";
+import { api } from "../lib/data";
 
 export default function DeviceDetail({ device, onClose, onRenamed }) {
   const [history, setHistory] = useState([]);
@@ -10,19 +11,14 @@ export default function DeviceDetail({ device, onClose, onRenamed }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/device-history?mac=${encodeURIComponent(device.mac)}&minutes=30`)
-      .then((r) => r.json())
+    api.getDeviceHistory(device.mac, 30)
       .then((d) => setHistory(Array.isArray(d) ? d : []))
       .catch(() => {});
   }, [device.mac]);
 
   const save = async () => {
     setSaving(true);
-    await fetch("/api/device/rename", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mac: device.mac, name }),
-    }).catch(() => {});
+    await api.renameDevice(device.mac, name);
     setSaving(false);
     onRenamed?.();
     onClose();
@@ -61,18 +57,22 @@ export default function DeviceDetail({ device, onClose, onRenamed }) {
           <Sparkline points={history} height={90} />
         </div>
 
-        <div className="sheet-section">Rename device</div>
-        <div className="rename-row">
-          <input
-            className="rename-input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={device.hostname || device.mac}
-          />
-          <button className="btn-primary" onClick={save} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </div>
+        {api.canEdit && (
+          <>
+            <div className="sheet-section">Rename device</div>
+            <div className="rename-row">
+              <input
+                className="rename-input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={device.hostname || device.mac}
+              />
+              <button className="btn-primary" onClick={save} disabled={saving}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </>
+        )}
 
         <button className="btn-ghost" onClick={onClose}>Close</button>
       </div>
