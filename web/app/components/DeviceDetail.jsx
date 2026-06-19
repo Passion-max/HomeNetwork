@@ -52,10 +52,14 @@ export default function DeviceDetail({ device, onClose, onRenamed }) {
           </div>
         )}
 
-        <div className="sheet-section">Throughput · last 30 min</div>
-        <div className="panel" style={{ padding: "14px 14px 10px" }}>
-          <Sparkline points={history} height={90} />
-        </div>
+        {(!api.cloud || history.length > 0) && (
+          <>
+            <div className="sheet-section">Throughput · last 30 min</div>
+            <div className="panel" style={{ padding: "14px 14px 10px" }}>
+              <Sparkline points={history} height={90} />
+            </div>
+          </>
+        )}
 
         {api.canEdit && (
           <>
