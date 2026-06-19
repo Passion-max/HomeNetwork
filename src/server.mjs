@@ -6,8 +6,11 @@ import { existsSync } from "node:fs";
 import { join, normalize, extname } from "node:path";
 import { pollOnce } from "./poller.mjs";
 import { saveSnapshot } from "./db.mjs";
-import { getState, getThroughputHistory, getConsumption, getDeviceHistory } from "./queries.mjs";
-import { setDeviceName } from "./db.mjs";
+import { store } from "./store/index.mjs";
+import { startSync, syncEnabled } from "./sync/supabase.mjs";
+import {
+  authEnabled, authConfig, verifyPassword, issueSession, sessionFromReq, sessionCookie, clearCookie,
+} from "./auth.mjs";
 
 const readBody = (req) =>
   new Promise((resolve) => {
@@ -21,11 +24,18 @@ const INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 15000);
 
 const sseClients = new Set();
 
+// Collector health — surfaced on /api/state so the UI can tell live from stale
+// (a router/VPN outage used to freeze the dashboard silently behind a "LIVE" badge).
+const health = { last_ok_ts: null, last_error: null, consecutive_failures: 0 };
+
 async function tick() {
   try {
     const data = await pollOnce();
     saveSnapshot(data);
-    const state = getState();
+    health.last_ok_ts = Date.now();
+    health.last_error = null;
+    health.consecutive_failures = 0;
+    const state = await store.getState();
     const payload = `data: ${JSON.stringify(state)}\n\n`;
     for (const res of sseClients) res.write(payload);
     process.stdout.write(
@@ -33,17 +43,45 @@ async function tick() {
         `↓${(state.totals.down_kbps / 1000).toFixed(1)} ↑${(state.totals.up_kbps / 1000).toFixed(1)} Mbps   `,
     );
   } catch (e) {
-    console.error("\npoll error:", e.message);
+    health.consecutive_failures += 1;
+    health.last_error = e.message;
+    console.error(`\npoll error (#${health.consecutive_failures}):`, e.message);
   }
 }
 
-const json = (res, body, status = 200) => {
-  res.writeHead(status, {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-  });
+/** Collector health block merged into /api/state, derived from data freshness. */
+function collectorHealth(state) {
+  const now = Date.now();
+  const age_s = state?.ts ? Math.round((now - state.ts) / 1000) : null;
+  const healthy = age_s != null && age_s < (INTERVAL_MS * 3) / 1000;
+  return {
+    healthy,
+    age_s,
+    last_ok_ts: health.last_ok_ts,
+    consecutive_failures: health.consecutive_failures,
+    last_error: health.last_error,
+  };
+}
+
+const json = (res, body, status = 200, headers = {}) => {
+  res.writeHead(status, { "Content-Type": "application/json", ...headers });
   res.end(JSON.stringify(body));
 };
+
+// Simple in-memory brute-force guard for the login endpoint (per client IP).
+const loginFails = new Map(); // ip -> { n, ts }
+const MAX_FAILS = 10;
+const FAIL_WINDOW_MS = 15 * 60 * 1000;
+function loginRateLimited(ip) {
+  const e = loginFails.get(ip);
+  if (!e || Date.now() - e.ts > FAIL_WINDOW_MS) return false;
+  return e.n >= MAX_FAILS;
+}
+function noteLoginFail(ip) {
+  const e = loginFails.get(ip);
+  if (!e || Date.now() - e.ts > FAIL_WINDOW_MS) loginFails.set(ip, { n: 1, ts: Date.now() });
+  else e.n += 1;
+}
 
 // Static frontend (the exported Next site). Present only in single-process /
 // production mode; in dev the Next server handles the UI instead.
@@ -79,35 +117,66 @@ async function serveStatic(res, pathname) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
-  // CORS preflight (rename POST from the browser)
   if (req.method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    });
+    // Same-origin in prod (UI + API on one port) and in dev (Next proxies /api),
+    // so no cross-origin CORS headers are issued.
+    res.writeHead(204);
     return res.end();
   }
 
+  const session = authEnabled() ? sessionFromReq(req) : { username: "open" };
+
+  // Public auth endpoints + status (do not require a session).
+  if (url.pathname === "/api/me") {
+    return json(res, { auth_enabled: authEnabled(), authenticated: !!session, username: session?.username ?? null });
+  }
+  if (url.pathname === "/api/login" && req.method === "POST") {
+    const ip = req.socket.remoteAddress ?? "?";
+    if (loginRateLimited(ip)) return json(res, { error: "too many attempts — wait a few minutes" }, 429);
+    let body = {};
+    try { body = JSON.parse((await readBody(req)) || "{}"); } catch {}
+    const c = authConfig();
+    const ok = body.username === c.username && verifyPassword(body.password, c.passwordHash);
+    if (!ok) {
+      noteLoginFail(ip);
+      return json(res, { error: "invalid username or password" }, 401);
+    }
+    loginFails.delete(ip);
+    return json(res, { ok: true, username: c.username }, 200, { "Set-Cookie": sessionCookie(issueSession(c.username)) });
+  }
+  if (url.pathname === "/api/logout" && req.method === "POST") {
+    return json(res, { ok: true }, 200, { "Set-Cookie": clearCookie() });
+  }
+
+  // Everything else under /api requires a valid session when auth is enabled.
+  if (url.pathname.startsWith("/api/") && authEnabled() && !session) {
+    return json(res, { error: "unauthorized" }, 401);
+  }
+
   try {
-    if (url.pathname === "/api/state") return json(res, getState() ?? {});
+    if (url.pathname === "/api/state") {
+      const state = (await store.getState()) ?? {};
+      state.collector = collectorHealth(state);
+      state.auth_enabled = authEnabled();
+      return json(res, state);
+    }
 
     if (url.pathname === "/api/history") {
       const minutes = Number(url.searchParams.get("minutes") ?? 60);
-      return json(res, getThroughputHistory(minutes));
+      return json(res, await store.getHistory(minutes));
     }
 
-    if (url.pathname === "/api/consumption") return json(res, getConsumption());
+    if (url.pathname === "/api/consumption") return json(res, await store.getConsumption());
 
     if (url.pathname === "/api/device-history") {
       const mac = url.searchParams.get("mac");
       const minutes = Number(url.searchParams.get("minutes") ?? 30);
-      return json(res, mac ? getDeviceHistory(mac, minutes) : []);
+      return json(res, mac ? await store.getDeviceHistory(mac, minutes) : []);
     }
 
     if (url.pathname === "/api/device/rename" && req.method === "POST") {
       const { mac, name } = JSON.parse((await readBody(req)) || "{}");
-      if (mac) setDeviceName(mac, name);
+      if (mac) await store.setDeviceName(mac, name);
       return json(res, { ok: !!mac });
     }
   } catch (e) {
@@ -120,9 +189,8 @@ const server = createServer(async (req, res) => {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
-      "Access-Control-Allow-Origin": "*",
     });
-    const s = getState();
+    const s = await store.getState();
     if (s) res.write(`data: ${JSON.stringify(s)}\n\n`);
     sseClients.add(res);
     req.on("close", () => sseClients.delete(res));
@@ -139,6 +207,10 @@ server.listen(PORT, () => {
     `${SERVE_WEB ? "Dashboard + API" : "API"} on http://localhost:${PORT}` +
       `${SERVE_WEB ? " (serving web/out)" : ""}  ·  polling every ${INTERVAL_MS / 1000}s`,
   );
+  if (authEnabled()) console.log("auth: ENABLED (single household login)");
+  else console.warn("⚠ auth DISABLED — API is open (LAN only). Run `npm run set-password` and set the .env lines to enable login.");
+  if (startSync()) console.log("cloud sync: ON (mirroring to Supabase)");
+  else if (!syncEnabled()) console.log("cloud sync: off (set SUPABASE_URL/SERVICE_KEY/HOME_ID to enable)");
   tick();
   setInterval(tick, INTERVAL_MS);
 });

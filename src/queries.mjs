@@ -1,5 +1,8 @@
-// Read helpers over the SQLite history. Computes live speeds from sample deltas.
+// Read helpers over the SQLite history. Live speeds come from sample deltas; all
+// cumulative usage (Today/Month/All-time, per-device) comes from the unified ledger.
 import { db } from "./db.mjs";
+import { dayKey } from "./ledger.mjs";
+import { aggregateConsumption, lanToIf } from "./usage.mjs";
 
 const twoLatestTs = () =>
   db.prepare("SELECT ts FROM snapshot ORDER BY ts DESC LIMIT 2").all().map((r) => r.ts);
@@ -8,48 +11,13 @@ const twoLatestTs = () =>
 const kbps = (cur, prev, dtMs) =>
   cur == null || prev == null || !dtMs || cur < prev ? 0 : Math.round(((cur - prev) * 8) / (dtMs / 1000) / 1000);
 
-/** Positive byte delta between two cumulative readings; treats a drop as a counter reset. */
-const bdelta = (cur, prev) => (cur == null || prev == null ? 0 : cur >= prev ? cur - prev : Math.max(0, cur));
-
-const startOfTodayMs = () => {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-};
-
-/** "LAN3" -> "DEV.ETH.IF3" so we can attribute a wired port's traffic to its device. */
-const lanToIf = (port) => {
-  const n = /(\d+)/.exec(port ?? "")?.[1];
-  return n ? `DEV.ETH.IF${n}` : null;
-};
-
-/** Cumulative usage since `since`, summing reset-aware deltas. */
-function usageSince(since) {
-  // WiFi: per-MAC from device byte counters.
-  const wifi = {};
-  let prev = {};
-  for (const r of db.prepare("SELECT mac,rx_bytes,tx_bytes FROM device_sample WHERE ts>=? ORDER BY mac,ts").all(since)) {
-    const p = prev[r.mac];
-    (wifi[r.mac] ??= { down: 0, up: 0 });
-    if (p) {
-      wifi[r.mac].down += bdelta(r.rx_bytes, p.rx);
-      wifi[r.mac].up += bdelta(r.tx_bytes, p.tx);
-    }
-    prev[r.mac] = { rx: r.rx_bytes, tx: r.tx_bytes };
-  }
-  // Wired: per-port. From the device's view, port InBytes = its upload, OutBytes = its download.
-  const ports = {};
-  prev = {};
-  for (const r of db.prepare("SELECT port,in_bytes,out_bytes FROM port_sample WHERE ts>=? ORDER BY port,ts").all(since)) {
-    const p = prev[r.port];
-    (ports[r.port] ??= { down: 0, up: 0 });
-    if (p) {
-      ports[r.port].down += bdelta(r.out_bytes, p.out);
-      ports[r.port].up += bdelta(r.in_bytes, p.in);
-    }
-    prev[r.port] = { in: r.in_bytes, out: r.out_bytes };
-  }
-  return { wifi, ports };
+/** Today's usage per scope (mac or 'DEV.ETH.IFx') from the unified ledger. */
+function todayUsageByScope() {
+  const day = dayKey(Date.now());
+  const map = {};
+  for (const r of db.prepare("SELECT scope, down_bytes, up_bytes FROM usage_daily WHERE day = ?").all(day))
+    map[r.scope] = { down: r.down_bytes, up: r.up_bytes };
+  return map;
 }
 
 /** Full current state: system, WAN, devices (with live speed), totals. */
@@ -70,7 +38,7 @@ export function getState() {
     (ts1 ? db.prepare("SELECT * FROM device_sample WHERE ts = ?").all(ts1) : []).map((r) => [r.mac, r]),
   );
 
-  const usage = usageSince(startOfTodayMs());
+  const usage = todayUsageByScope();
 
   // Port samples (for wired-device live speed + total throughput).
   const curPorts = db.prepare("SELECT * FROM port_sample WHERE ts = ?").all(ts2);
@@ -81,7 +49,7 @@ export function getState() {
 
   const devices = cur.map((s) => {
     const p = prev.get(s.mac);
-    const u = s.conn_type === "wifi" ? usage.wifi[s.mac] : usage.ports[lanToIf(s.dev_port)];
+    const u = s.conn_type === "wifi" ? usage[s.mac] : usage[lanToIf(s.dev_port)];
 
     // Live speed: WiFi from per-device counters; wired from its LAN port
     // (port out-bytes = the device's download, in-bytes = its upload).
@@ -116,13 +84,14 @@ export function getState() {
     };
   });
 
-  // Total throughput from active port deltas.
+  // Total throughput from active port deltas. Convention (same as per-device /
+  // used-today): a LAN port's OUT bytes = the device's download, IN = its upload.
   let totalDown = 0,
     totalUp = 0;
   for (const port of curPorts) {
     const pp = prevPorts.get(port.port);
-    totalDown += kbps(port.in_bytes, pp?.in_bytes, dtMs);
-    totalUp += kbps(port.out_bytes, pp?.out_bytes, dtMs);
+    totalDown += kbps(port.out_bytes, pp?.out_bytes, dtMs);
+    totalUp += kbps(port.in_bytes, pp?.in_bytes, dtMs);
   }
 
   // Network name from connected Wi-Fi clients (strip trailing band digit:
@@ -155,31 +124,9 @@ export function getState() {
   };
 }
 
-/**
- * Total network usage since `sinceMs`, using the robust per-device / per-port
- * method (the same one used for live speed and "used today"). WiFi clients use
- * their own RX/TX counters (unambiguous: RX = download), wired uses each LAN
- * port (out = download, in = upload). Reset-aware. We deliberately do NOT diff
- * the router's *combined* counters — a single poll missing a port makes that
- * sum dip then "recover", inflating totals with phantom GBs.
- */
-function sumUsageSince(sinceMs) {
-  const u = usageSince(sinceMs);
-  let down = 0, up = 0;
-  for (const v of Object.values(u.wifi)) { down += v.down; up += v.up; }
-  for (const v of Object.values(u.ports)) { down += v.down; up += v.up; }
-  return { down_bytes: down, up_bytes: up, total_bytes: down + up };
-}
-
-/** Usage over windows (today / month / all-time since tracking began). */
+/** Usage over windows (today / month / all-time), from the unified ledger. */
 export function getUsageWindows() {
-  const sot = new Date(); sot.setHours(0, 0, 0, 0);
-  const som = new Date(); som.setDate(1); som.setHours(0, 0, 0, 0);
-  return {
-    today: sumUsageSince(sot.getTime()),
-    month: sumUsageSince(som.getTime()),
-    all: sumUsageSince(0),
-  };
+  return getConsumption().windows;
 }
 
 /** Per-device throughput + signal history for the device detail view. */
@@ -219,35 +166,21 @@ export function getThroughputHistory(minutes = 60) {
     const dt = points[i].ts - points[i - 1].ts;
     out.push({
       ts: points[i].ts,
-      down_kbps: kbps(points[i].inB, points[i - 1].inB, dt),
-      up_kbps: kbps(points[i].outB, points[i - 1].outB, dt),
+      // OUT bytes = download, IN = upload (matches the gauge + per-device convention).
+      down_kbps: kbps(points[i].outB, points[i - 1].outB, dt),
+      up_kbps: kbps(points[i].inB, points[i - 1].inB, dt),
     });
   }
   return out;
 }
 
-/** All-time cumulative consumption since tracking began, with per-device breakdown. */
+/** All-time / month / today consumption + per-device breakdown, from the ledger. */
 export function getConsumption() {
-  const u = usageSince(0);
-  const devs = db.prepare("SELECT mac,custom_name,hostname,conn_type,port FROM device").all();
-
-  let down = 0,
-    up = 0;
-  const perDevice = [];
-  for (const d of devs) {
-    const usg = d.conn_type === "wifi" ? u.wifi[d.mac] : u.ports[lanToIf(d.port)];
-    if (!usg || usg.down + usg.up === 0) continue;
-    down += usg.down;
-    up += usg.up;
-    perDevice.push({
-      name: d.custom_name || d.hostname || d.mac,
-      conn_type: d.conn_type,
-      down_bytes: usg.down,
-      up_bytes: usg.up,
-      total_bytes: usg.down + usg.up,
-    });
-  }
-  perDevice.sort((a, b) => b.total_bytes - a.total_bytes);
+  const today = dayKey(Date.now());
+  const month = today.slice(0, 7); // 'YYYY-MM'
+  const rows = db.prepare("SELECT day, scope, kind, down_bytes, up_bytes FROM usage_daily").all();
+  const deviceRows = db.prepare("SELECT mac, custom_name, hostname, conn_type, port FROM device").all();
+  const agg = aggregateConsumption(rows, deviceRows, { today, month });
 
   const since_ts = db.prepare("SELECT MIN(ts) m FROM snapshot").get()?.m ?? null;
 
@@ -271,8 +204,10 @@ export function getConsumption() {
     : null;
 
   return {
-    total_bytes: down + up, down_bytes: down, up_bytes: up,
-    since_ts, since_boot, windows: getUsageWindows(), devices: perDevice,
+    ...agg,
+    since_ts,
+    since_boot,
+    uptime_s: since_boot?.uptime_s ?? null,
   };
 }
 

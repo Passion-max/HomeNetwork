@@ -7,7 +7,8 @@
   "scripts": {
     "probe": "node --env-file=.env src/probe.mjs",
     "poll": "node --experimental-sqlite --env-file=.env src/poller.mjs",
-    "start": "node --experimental-sqlite --env-file=.env src/server.mjs"
+    "start": "node --experimental-sqlite --env-file=.env src/server.mjs",
+    "set-password": "node --env-file=.env src/set-password.mjs"
   },
   "engines": {
     "node": ">=20"

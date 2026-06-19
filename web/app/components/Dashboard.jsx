@@ -7,6 +7,7 @@ import Sparkline from "./Sparkline";
 import BottomNav from "./BottomNav";
 import DeviceDetail from "./DeviceDetail";
 import SpeedTest from "./SpeedTest";
+import Login from "./Login";
 
 export default function Dashboard() {
   const [state, setState] = useState(null);
@@ -16,21 +17,31 @@ export default function Dashboard() {
   const [selected, setSelected] = useState(null);
   const [rangeMin, setRangeMin] = useState(30);
   const [live, setLive] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0); // bump to re-pull after rename
+  const [authRequired, setAuthRequired] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0); // bump to re-pull after rename/login
 
   // Live state — same-origin polling (works on PC and phone alike).
   useEffect(() => {
     let stop = false;
     const poll = async () => {
       try {
-        const r = await fetch("/api/state").then((x) => x.json());
-        if (!stop && r?.ts) { setState(r); setLive(true); }
+        const r = await fetch("/api/state");
+        if (r.status === 401) { if (!stop) { setAuthRequired(true); setLive(false); } return; }
+        const data = await r.json();
+        if (!stop && data?.ts) { setAuthRequired(false); setState(data); setLive(true); }
       } catch { if (!stop) setLive(false); }
     };
     poll();
     const t = setInterval(poll, 5000);
     return () => { stop = true; clearInterval(t); };
   }, [refreshKey]);
+
+  const logout = async () => {
+    await fetch("/api/logout", { method: "POST" }).catch(() => {});
+    setState(null);
+    setLive(false);
+    setAuthRequired(true);
+  };
 
   useEffect(() => {
     const load = () =>
@@ -50,9 +61,23 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [refreshKey]);
 
+  if (authRequired) {
+    return <Login onSuccess={() => { setAuthRequired(false); setRefreshKey((k) => k + 1); }} />;
+  }
+
   if (!state) {
     return <div className="loading"><div className="spin" /><span>linking to gateway…</span></div>;
   }
+
+  // Freshness comes from the collector, not from "did the fetch succeed" — a
+  // reachable server can still be serving a stale snapshot (router/VPN outage).
+  const col = state.collector || {};
+  const healthy = live && col.healthy;
+  const staleLabel =
+    col.age_s == null ? "offline"
+    : col.age_s >= 3600 ? `stale · ${Math.round(col.age_s / 3600)}h`
+    : `stale · ${Math.max(1, Math.round(col.age_s / 60))}m`;
+  const chipLabel = !live ? "reconnecting" : col.healthy ? "live" : staleLabel;
 
   return (
     <>
@@ -68,9 +93,14 @@ export default function Dashboard() {
               <span className="brand-net"><WifiGlyph />{state.network}</span>
             )}
           </div>
-          <div className="livechip">
-            <span className={`dot ${live ? "live" : "off"}`} />
-            {live ? "live" : "reconnecting"}
+          <div className="topbar-right">
+            <div className="livechip" title={col.last_error || ""}>
+              <span className={`dot ${healthy ? "live" : "off"}`} />
+              {chipLabel}
+            </div>
+            {state.auth_enabled && (
+              <button className="logout-btn" onClick={logout} title="Sign out" aria-label="Sign out">⏻</button>
+            )}
           </div>
         </header>
 
@@ -133,8 +163,16 @@ function HomeView({ state, consumption, history, rangeMin, setRangeMin, setTab, 
 
   return (
     <>
-      {/* total-usage hero — tap to open the Usage page */}
-      <button className="panel usage-hero reveal" onClick={() => setTab("usage")}>
+      {/* total-usage hero — tap to open the Usage page.
+          NB: a <div role="button"> (not a real <button>) because it contains the
+          window-toggle buttons, and a button cannot nest a button (hydration error). */}
+      <div
+        className="panel usage-hero reveal"
+        role="button"
+        tabIndex={0}
+        onClick={() => setTab("usage")}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setTab("usage"); } }}
+      >
         <div className="uh-top">
           <span className="uh-label">Total usage</span>
           <div className="uh-toggle" onClick={(e) => e.stopPropagation()}>
@@ -151,7 +189,7 @@ function HomeView({ state, consumption, history, rangeMin, setRangeMin, setTab, 
             <span className="uh-hint">details →</span>
           </div>
         )}
-      </button>
+      </div>
 
       <section className="grid">
         <div className="panel hero reveal" style={{ animationDelay: "60ms" }}>
@@ -306,13 +344,35 @@ function UsageView({ consumption }) {
   const w = consumption?.windows;
   const all = w?.all ?? { total_bytes: consumption?.total_bytes ?? 0, down_bytes: 0, up_bytes: 0 };
   const animated = useCountUp(all.total_bytes / 1073741824); // GB
+  const boot = consumption.since_boot;
   if (!consumption) return <div className="empty">loading usage…</div>;
   return (
     <>
+      {boot && (
+        <div className="panel consume open reveal" style={{ marginBottom: 12 }}>
+          <div className="consume-head">
+            <div className="consume-left">
+              <span className="consume-label">Metered by router</span>
+              <span className="consume-since">since boot · {fmtDur(boot.uptime_s)} uptime</span>
+            </div>
+            <div className="consume-value mono">{(boot.total_bytes / 1073741824).toFixed(2)} <span style={{ fontSize: "0.5em" }}>GB</span></div>
+          </div>
+          <div className="consume-detail">
+            <div className="consume-split">
+              <span className="down-c mono">↓ {fmtBytes(boot.down_bytes)} down</span>
+              <span className="up-c mono">↑ {fmtBytes(boot.up_bytes)} up</span>
+            </div>
+            <div className="usage-windows">
+              <WinStat label="Wired" v={fmtBytes(boot.wired_bytes)} />
+              <WinStat label="Wi-Fi" v={fmtBytes(boot.wifi_bytes)} />
+            </div>
+          </div>
+        </div>
+      )}
       <div className="panel consume open reveal">
         <div className="consume-head">
           <div className="consume-left">
-            <span className="consume-label">Total usage</span>
+            <span className="consume-label">Tracked by dashboard</span>
             <span className="consume-since">
               since {consumption.since_ts ? new Date(consumption.since_ts).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "tracking began"}
             </span>

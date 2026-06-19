@@ -12,6 +12,11 @@ import { createHash } from "node:crypto";
 
 const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 
+// Abort any router request that hangs, so one stuck socket can't freeze a poll
+// cycle indefinitely (a dead/unreachable router used to wedge the collector).
+const FETCH_TIMEOUT_MS = Number(process.env.ROUTER_TIMEOUT_MS ?? 8000);
+const timeout = () => AbortSignal.timeout(FETCH_TIMEOUT_MS);
+
 export class RouterClient {
   constructor({ host, username, password } = {}) {
     this.host = host ?? process.env.ROUTER_HOST ?? "192.168.1.1";
@@ -47,7 +52,7 @@ export class RouterClient {
 
   async #get(tag, type = "menuData", extraQuery = "") {
     const url = `${this.base}/?_type=${type}&_tag=${tag}${extraQuery}&_=${Date.now()}`;
-    const res = await fetch(url, { headers: this.#headers(), redirect: "manual" });
+    const res = await fetch(url, { headers: this.#headers(), redirect: "manual", signal: timeout() });
     this.#captureCookie(res);
     return res.text();
   }
@@ -60,6 +65,7 @@ export class RouterClient {
     // Step 1: initial session token
     const entryRes = await fetch(`${this.base}/?_type=loginData&_tag=login_entry&_=${Date.now()}`, {
       headers: this.#headers(),
+      signal: timeout(),
     });
     this.#captureCookie(entryRes);
     const entryJson = await entryRes.json().catch(() => ({}));
@@ -82,6 +88,7 @@ export class RouterClient {
       headers: this.#headers({ "Content-Type": "application/x-www-form-urlencoded" }),
       body,
       redirect: "manual",
+      signal: timeout(),
     });
     this.#captureCookie(loginRes);
     const result = await loginRes.json().catch(() => ({}));
@@ -92,6 +99,14 @@ export class RouterClient {
     if (!ok) {
       throw new Error(`Login failed: ${JSON.stringify(result)}`);
     }
+
+    // CRITICAL (firmware V9.0.11P5N17+): login_need_refresh means the session is
+    // only half-activated. The real browser reloads the root page after login,
+    // and that GET / is what finalizes the session server-side. Without it every
+    // subsequent `menuView` 404s and `menuData` returns SessionTimeout — i.e. the
+    // poller logs in "successfully" but can never read any data. Replicate it.
+    await fetch(`${this.base}/`, { headers: this.#headers(), signal: timeout() }).catch(() => {});
+
     return result;
   }
 
