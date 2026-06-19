@@ -1,10 +1,11 @@
 /** @type {import('next').NextConfig} */
 const API = process.env.API_ORIGIN ?? "http://localhost:4000";
 
-// When BUILD_EXPORT=1 we emit a fully static site (web/out) that the Node
-// backend serves directly — one process, no Next runtime (ideal for the phone).
-// Otherwise we run the normal dev server with an /api proxy to the backend.
-const EXPORT = process.env.BUILD_EXPORT === "1";
+// Any production build emits a fully static site (no Next server runtime): the
+// home backend serves web/out directly, and Vercel serves it from its CDN (the
+// hosted UI talks to Supabase straight from the browser, so it needs no server).
+// Only `next dev` uses the /api proxy + allowedDevOrigins.
+const EXPORT = process.env.BUILD_EXPORT === "1" || process.env.NODE_ENV === "production";
 
 const nextConfig = EXPORT
   ? {
