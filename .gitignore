@@ -22,3 +22,9 @@ _probe_*
 # OS noise
 .DS_Store
 Thumbs.db
+
+# internal docs — kept locally, not published to the repo
+/CLAUDE.md
+/docs/HANDOFF.md
+/docs/MACOS.md
+/docs/USAGE_UNIFICATION.md
