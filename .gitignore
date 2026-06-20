@@ -8,6 +8,7 @@ web/out/
 .env
 .env.local
 web/.env.local
+data/config.json
 
 # database (history is machine-local; recreated on first run)
 data/*.db

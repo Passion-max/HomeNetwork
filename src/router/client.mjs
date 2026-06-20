@@ -9,6 +9,7 @@
 //   5. Response sets the session cookie; we reuse it for every data request.
 
 import { createHash } from "node:crypto";
+import { getRouter } from "../config.mjs";
 
 const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 
@@ -18,13 +19,23 @@ const FETCH_TIMEOUT_MS = Number(process.env.ROUTER_TIMEOUT_MS ?? 8000);
 const timeout = () => AbortSignal.timeout(FETCH_TIMEOUT_MS);
 
 export class RouterClient {
-  constructor({ host, username, password } = {}) {
-    this.host = host ?? process.env.ROUTER_HOST ?? "192.168.1.1";
-    this.username = username ?? process.env.ROUTER_USERNAME ?? "user";
-    this.password = password ?? process.env.ROUTER_PASSWORD;
-    this.base = `http://${this.host}`;
+  // Pass explicit creds to test a candidate (the setup wizard does this);
+  // otherwise credentials are read live from config (data/config.json or env),
+  // so saving them via the wizard takes effect without a restart.
+  constructor(override = null) {
+    this.override = override;
     this.cookie = "";       // session cookie (SID=...) captured at login
     this.sessToken = "";    // CSRF token, rotates with each response
+  }
+
+  get creds() {
+    return this.override ?? getRouter();
+  }
+  get host() {
+    return this.creds.host;
+  }
+  get base() {
+    return `http://${this.creds.host}`;
   }
 
   // --- low-level request helpers --------------------------------------------
@@ -60,7 +71,8 @@ export class RouterClient {
   // --- login -----------------------------------------------------------------
 
   async login() {
-    if (!this.password) throw new Error("ROUTER_PASSWORD is not set (check your .env file).");
+    const { username, password } = this.creds;
+    if (!password) throw new Error("Router not configured yet.");
 
     // Step 1: initial session token
     const entryRes = await fetch(`${this.base}/?_type=loginData&_tag=login_entry&_=${Date.now()}`, {
@@ -79,8 +91,8 @@ export class RouterClient {
     // Step 3 + 4: hash and submit
     const body = new URLSearchParams({
       action: "login",
-      Username: this.username,
-      Password: sha256(this.password + token),
+      Username: username,
+      Password: sha256(password + token),
       _sessionTOKEN: this.sessToken,
     });
     const loginRes = await fetch(`${this.base}/?_type=loginData&_tag=login_entry`, {

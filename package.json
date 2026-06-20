@@ -5,10 +5,10 @@
   "type": "module",
   "description": "Premium management dashboard for the ZTE F670L GPON ONT",
   "scripts": {
-    "probe": "node --env-file=.env src/probe.mjs",
-    "poll": "node --experimental-sqlite --env-file=.env src/poller.mjs",
-    "start": "node --experimental-sqlite --env-file=.env src/server.mjs",
-    "set-password": "node --env-file=.env src/set-password.mjs"
+    "probe": "node --env-file-if-exists=.env src/probe.mjs",
+    "poll": "node --experimental-sqlite --env-file-if-exists=.env src/poller.mjs",
+    "start": "node --experimental-sqlite --env-file-if-exists=.env src/server.mjs",
+    "set-password": "node --env-file-if-exists=.env src/set-password.mjs"
   },
   "engines": {
     "node": ">=20"

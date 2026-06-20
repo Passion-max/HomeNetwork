@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Set up your FibreX dashboard</title>
+<style>
+  :root { --bg:#08080a; --panel:rgba(255,255,255,.04); --edge:rgba(255,255,255,.09);
+          --edge2:rgba(255,204,0,.4); --ink:#f4f1e8; --dim:#968f7e; --mtn:#ffcc00; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100dvh; display:grid; place-items:center; padding:24px;
+         background:radial-gradient(1200px 600px at 50% -10%, #15130c, var(--bg));
+         color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .card { width:100%; max-width:380px; background:var(--panel); border:1px solid var(--edge);
+          border-radius:22px; padding:30px 26px; box-shadow:0 24px 60px -28px rgba(0,0,0,.9); }
+  .wm { font-weight:800; font-size:26px; letter-spacing:.5px; font-style:italic; }
+  .wm b{color:var(--mtn);} .wm span{color:var(--ink);} .wm i{color:var(--mtn);font-style:italic;}
+  h1 { font-size:18px; margin:18px 0 4px; }
+  p.sub { color:var(--dim); font-size:13.5px; margin:0 0 20px; line-height:1.5; }
+  label { display:block; font-size:12.5px; color:var(--dim); margin:14px 0 6px; }
+  input { width:100%; font-size:15px; padding:12px 14px; border-radius:12px; color:var(--ink);
+          border:1px solid var(--edge); background:rgba(255,255,255,.03); }
+  input:focus { outline:none; border-color:var(--edge2); }
+  .adv { background:none; border:none; color:var(--dim); font-size:12.5px; cursor:pointer; padding:10px 0 0; text-decoration:underline; }
+  .advbox { display:none; }
+  button.go { width:100%; margin-top:22px; font-size:15px; font-weight:700; cursor:pointer;
+              padding:13px; border-radius:12px; border:none; background:var(--mtn); color:#1a1600; }
+  button.go:disabled { opacity:.6; cursor:default; }
+  .msg { margin-top:14px; font-size:13px; min-height:18px; }
+  .msg.err { color:var(--bad); } .msg.ok { color:var(--mtn); }
+  .hint { color:var(--dim); font-size:12px; margin-top:18px; line-height:1.5; }
+</style>
+</head>
+<body>
+  <form class="card" id="f">
+    <div class="wm"><b>MTN</b> <span>FIBRE</span><i>X</i></div>
+    <h1>Connect your router</h1>
+    <p class="sub">One-time setup. Your password stays on this device and is only used to read your router.</p>
+
+    <label for="password">Router password</label>
+    <input id="password" type="password" placeholder="From the sticker under your router" autocomplete="off" autofocus />
+
+    <button type="button" class="adv" id="advToggle">Advanced settings</button>
+    <div class="advbox" id="advbox">
+      <label for="host">Router address</label>
+      <input id="host" type="text" value="192.168.1.1" />
+      <label for="username">Router username</label>
+      <input id="username" type="text" value="user" />
+    </div>
+
+    <button type="submit" class="go" id="go">Connect</button>
+    <div class="msg" id="msg"></div>
+    <div class="hint">Make sure this device is on your home WiFi (the same network as the router).</div>
+  </form>
+
+<script>
+  var advBtn = document.getElementById('advToggle'), advBox = document.getElementById('advbox');
+  advBtn.onclick = function () { advBox.style.display = advBox.style.display === 'block' ? 'none' : 'block'; };
+  var f = document.getElementById('f'), go = document.getElementById('go'), msg = document.getElementById('msg');
+  f.onsubmit = async function (e) {
+    e.preventDefault();
+    var password = document.getElementById('password').value;
+    var host = document.getElementById('host').value.trim() || '192.168.1.1';
+    var username = document.getElementById('username').value.trim() || 'user';
+    if (!password) { msg.className = 'msg err'; msg.textContent = 'Enter your router password.'; return; }
+    go.disabled = true; msg.className = 'msg'; msg.textContent = 'Connecting…';
+    try {
+      var r = await fetch('/api/setup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host: host, username: username, password: password })
+      });
+      var j = await r.json().catch(function(){ return {}; });
+      if (r.ok && j.ok) {
+        msg.className = 'msg ok'; msg.textContent = 'Connected! Loading your dashboard…';
+        setTimeout(function(){ location.href = '/'; }, 1200);
+      } else {
+        go.disabled = false; msg.className = 'msg err';
+        msg.textContent = j.error || "Couldn't connect. Check the password and your WiFi.";
+      }
+    } catch (err) {
+      go.disabled = false; msg.className = 'msg err'; msg.textContent = "Couldn't reach the app. Try again.";
+    }
+  };
+</script>
+</body>
+</html>

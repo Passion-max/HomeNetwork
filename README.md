@@ -18,20 +18,20 @@ All-time), a fast.com-style speed test, router health — MTN-branded, dark them
 - **Run anywhere** — local LAN, an always-on box, or a public hosted site.
 
 ## Quick start (local, on your LAN)
-Requires **Node ≥ 22.5** (for built-in `node:sqlite`).
+Requires **Node ≥ 22.9**. No config files to edit — a setup page asks for your
+router password on first run.
 ```bash
-# 1. backend config — create .env (copy .env.example):
-#    ROUTER_HOST=192.168.1.1
-#    ROUTER_USERNAME=user
-#    ROUTER_PASSWORD=<your router 'user' password>
-
-# 2. build the UI once, then run the single process (UI + API + poller) on :4000
+# build the UI once, then start the single process (UI + API + poller) on :4000
 cd web && npm install && npm run build:static && cd ..
-npm start                                # http://localhost:4000
-
-# (dev with hot reload instead: `cd web && npm run dev` on :3010, proxies /api → :4000)
+npm start
 ```
-You must be on the same LAN as the router to reach it.
+Now open **http://localhost:4000** — you'll get a **setup page**: enter your router
+password (it's on the sticker under the router) and you're done. You must be on the
+same WiFi as the router.
+
+> Prefer config files? You can still create a `.env` (see `.env.example`) with
+> `ROUTER_HOST` / `ROUTER_USERNAME` / `ROUTER_PASSWORD` and skip the setup page.
+> Dev with hot reload: `cd web && npm run dev` on :3010 (proxies `/api` → :4000).
 
 ## Optional: require a login
 Auth is **off** until configured (the API is open on the LAN). To enable a single

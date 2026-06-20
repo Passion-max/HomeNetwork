@@ -8,6 +8,8 @@ import { pollOnce } from "./poller.mjs";
 import { saveSnapshot } from "./db.mjs";
 import { store } from "./store/index.mjs";
 import { startSync, syncEnabled } from "./sync/supabase.mjs";
+import { routerConfigured, saveRouter } from "./config.mjs";
+import { RouterClient } from "./router/client.mjs";
 import {
   authEnabled, authConfig, verifyPassword, issueSession, sessionFromReq, sessionCookie, clearCookie,
 } from "./auth.mjs";
@@ -93,6 +95,19 @@ const MIME = {
   ".woff": "font/woff", ".woff2": "font/woff2", ".txt": "text/plain",
 };
 
+// First-run wizard page, served for any page request until the router is set up.
+const SETUP_HTML = join(process.cwd(), "src", "setup.html");
+async function serveSetup(res) {
+  try {
+    const data = await readFile(SETUP_HTML);
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(data);
+  } catch {
+    res.writeHead(500);
+    res.end("setup page missing");
+  }
+}
+
 async function serveStatic(res, pathname) {
   // Resolve within WEB_DIR; map "/" and unknown routes to index.html (SPA).
   let rel = normalize(pathname).replace(/^(\.\.[/\\])+/, "").replace(/^[/\\]+/, "");
@@ -148,6 +163,24 @@ const server = createServer(async (req, res) => {
     return json(res, { ok: true }, 200, { "Set-Cookie": clearCookie() });
   }
 
+  // First-run setup: save router credentials (only while not yet configured).
+  if (url.pathname === "/api/setup" && req.method === "POST") {
+    if (routerConfigured()) return json(res, { ok: false, error: "Already set up." }, 403);
+    let body = {};
+    try { body = JSON.parse((await readBody(req)) || "{}"); } catch {}
+    const host = (body.host || "192.168.1.1").trim();
+    const username = (body.username || "user").trim();
+    const password = body.password;
+    if (!password) return json(res, { ok: false, error: "Enter your router password." }, 400);
+    try {
+      await new RouterClient({ host, username, password }).login();
+    } catch {
+      return json(res, { ok: false, error: "Couldn't connect — check the password and that you're on the home WiFi." }, 400);
+    }
+    saveRouter({ host, username, password });
+    return json(res, { ok: true });
+  }
+
   // Everything else under /api requires a valid session when auth is enabled.
   if (url.pathname.startsWith("/api/") && authEnabled() && !session) {
     return json(res, { error: "unauthorized" }, 401);
@@ -155,6 +188,7 @@ const server = createServer(async (req, res) => {
 
   try {
     if (url.pathname === "/api/state") {
+      if (!routerConfigured()) return json(res, { needs_setup: true });
       const state = (await store.getState()) ?? {};
       state.collector = collectorHealth(state);
       state.auth_enabled = authEnabled();
@@ -197,6 +231,8 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // Not set up yet → show the one-time setup wizard for any page request.
+  if (!url.pathname.startsWith("/api/") && !routerConfigured()) return serveSetup(res);
   // Anything else: serve the static frontend (single-process mode) or 404.
   if (SERVE_WEB && !url.pathname.startsWith("/api/")) return serveStatic(res, url.pathname);
   json(res, { error: "not found" }, 404);
@@ -211,6 +247,7 @@ server.listen(PORT, () => {
   else console.warn("⚠ auth DISABLED — API is open (LAN only). Run `npm run set-password` and set the .env lines to enable login.");
   if (startSync()) console.log("cloud sync: ON (mirroring to Supabase)");
   else if (!syncEnabled()) console.log("cloud sync: off (set SUPABASE_URL/SERVICE_KEY/HOME_ID to enable)");
+  if (!routerConfigured()) console.log(`\n→ Open http://localhost:${PORT} and enter your router password to finish setup.\n`);
   tick();
   setInterval(tick, INTERVAL_MS);
 });
