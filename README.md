@@ -17,21 +17,30 @@ All-time), a fast.com-style speed test, router health — MTN-branded, dark them
 - **Login** — optional single-household auth (dependency-free).
 - **Run anywhere** — local LAN, an always-on box, or a public hosted site.
 
-## Quick start (local, on your LAN)
-Requires **Node ≥ 22.9**. No config files to edit — a setup page asks for your
-router password on first run.
-```bash
-# build the UI once, then start the single process (UI + API + poller) on :4000
-cd web && npm install && npm run build:static && cd ..
-npm start
-```
-Now open **http://localhost:4000** — you'll get a **setup page**: enter your router
-password (it's on the sticker under the router) and you're done. You must be on the
-same WiFi as the router.
+## Quick start (run it on a PC at home)
+Install **Node ≥ 22.9** once (from [nodejs.org](https://nodejs.org), the LTS button),
+then:
 
-> Prefer config files? You can still create a `.env` (see `.env.example`) with
-> `ROUTER_HOST` / `ROUTER_USERNAME` / `ROUTER_PASSWORD` and skip the setup page.
-> Dev with hot reload: `cd web && npm run dev` on :3010 (proxies `/api` → :4000).
+**Easiest — double-click:**
+- **Mac:** double-click **`start.command`**
+- **Windows:** double-click **`start.bat`**
+
+It builds the dashboard the first time, starts it, and opens your browser to a
+**setup page** — type your router password (it's on the sticker under the router)
+and you're in. Keep that window open; the PC must be on the same WiFi as the router.
+
+**Or from a terminal:**
+```bash
+cd web && npm install && npm run build:static && cd ..
+npm start   # then open http://localhost:4000
+```
+> Prefer a config file? Create `.env` (see `.env.example`) with `ROUTER_HOST` /
+> `ROUTER_USERNAME` / `ROUTER_PASSWORD` to skip the setup page. Dev with hot reload:
+> `cd web && npm run dev` (:3010, proxies `/api` → :4000).
+
+## View it from anywhere
+Mirror to the cloud and open a private dashboard from any browser — the PC at home
+stays the source of truth. See **[docs/HOSTING.md](docs/HOSTING.md)** (Supabase + Vercel).
 
 ## Optional: require a login
 Auth is **off** until configured (the API is open on the LAN). To enable a single
@@ -41,9 +50,6 @@ npm run set-password -- 'your-password'   # prints AUTH_* + SESSION_SECRET lines
 # paste them into .env, then restart `npm start`
 ```
 
-## Run it from anywhere (hosted)
-Mirror to Supabase and deploy the read-only dashboard to Vercel — the home collector
-stays primary and keeps working offline. See **[docs/HOSTING.md](docs/HOSTING.md)**.
 
 ## Architecture
 ```
