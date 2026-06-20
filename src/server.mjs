@@ -202,6 +202,16 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/consumption") return json(res, await store.getConsumption());
 
+    if (url.pathname === "/api/usage") {
+      const period = url.searchParams.get("period") || "all"; // 'YYYY-MM-DD' | 'YYYY-MM' | 'all'
+      return json(res, await store.getUsageFor(period));
+    }
+
+    if (url.pathname === "/api/usage/series") {
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") ?? 14)));
+      return json(res, await store.getUsageSeries(days));
+    }
+
     if (url.pathname === "/api/device-history") {
       const mac = url.searchParams.get("mac");
       const minutes = Number(url.searchParams.get("minutes") ?? 30);

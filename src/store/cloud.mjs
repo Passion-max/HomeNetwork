@@ -47,6 +47,29 @@ async function getDeviceHistory() {
   return [];
 }
 
+async function getUsageFor(period) {
+  let filter;
+  if (period === "all") filter = "";
+  else if (/^\d{4}-\d{2}$/.test(period)) filter = `&day=like.${period}*`;
+  else filter = `&day=eq.${period}`;
+  const [rows, devices] = await Promise.all([
+    get(`usage_daily?home_id=eq.${HOME_ID}${filter}&select=day,scope,kind,down_bytes,up_bytes`),
+    get(`device?home_id=eq.${HOME_ID}&select=mac,custom_name,hostname,conn_type,port`),
+  ]);
+  const agg = aggregateConsumption(rows || [], devices || [], { today: period, month: period });
+  return { period, total_bytes: agg.total_bytes, down_bytes: agg.down_bytes, up_bytes: agg.up_bytes, unattributed: agg.unattributed, devices: agg.devices };
+}
+
+async function getUsageSeries(days = 14) {
+  const start = dayKey(Date.now() - (days - 1) * 86400000);
+  const rows = await get(`usage_daily?home_id=eq.${HOME_ID}&scope=neq.__unattributed__&day=gte.${start}&select=day,down_bytes,up_bytes`);
+  const byDay = {};
+  for (const r of rows || []) { const e = (byDay[r.day] ??= { d: 0, u: 0 }); e.d += r.down_bytes; e.u += r.up_bytes; }
+  return Object.entries(byDay)
+    .map(([day, v]) => ({ day, down_bytes: v.d, up_bytes: v.u, total_bytes: v.d + v.u }))
+    .sort((a, b) => (a.day < b.day ? -1 : 1));
+}
+
 async function setDeviceName(mac, name) {
   await fetch(`${BASE}/rest/v1/device?on_conflict=home_id,mac`, {
     method: "POST",
@@ -61,4 +84,4 @@ async function setDeviceName(mac, name) {
   });
 }
 
-export const cloudStore = { name: "cloud", getState, getConsumption, getHistory, getDeviceHistory, setDeviceName };
+export const cloudStore = { name: "cloud", getState, getConsumption, getHistory, getDeviceHistory, getUsageFor, getUsageSeries, setDeviceName };

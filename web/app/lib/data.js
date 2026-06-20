@@ -20,6 +20,8 @@ const local = {
   getHistory: (min) => fetch(`/api/history?minutes=${min}`).then((r) => (r.ok ? r.json() : [])),
   getDeviceHistory: (mac, min) =>
     fetch(`/api/device-history?mac=${encodeURIComponent(mac)}&minutes=${min}`).then((r) => (r.ok ? r.json() : [])),
+  getUsageFor: (period) => fetch(`/api/usage?period=${encodeURIComponent(period)}`).then((r) => (r.ok ? r.json() : null)),
+  getUsageSeries: (days) => fetch(`/api/usage/series?days=${days}`).then((r) => (r.ok ? r.json() : [])),
   renameDevice: (mac, name) =>
     fetch("/api/device/rename", {
       method: "POST",
@@ -65,6 +67,23 @@ const cloud = {
     return data || [];
   },
   getDeviceHistory: async () => [], // per-device samples aren't mirrored
+  async getUsageFor(period) {
+    let q = supabase.from("usage_daily").select("day,scope,kind,down_bytes,up_bytes");
+    if (period !== "all") q = /^\d{4}-\d{2}$/.test(period) ? q.like("day", period + "%") : q.eq("day", period);
+    const [{ data: rows }, { data: devs }] = await Promise.all([
+      q,
+      supabase.from("device").select("mac,custom_name,hostname,conn_type,port"),
+    ]);
+    const agg = aggregateConsumption(rows || [], devs || [], { today: period, month: period });
+    return { period, total_bytes: agg.total_bytes, down_bytes: agg.down_bytes, up_bytes: agg.up_bytes, unattributed: agg.unattributed, devices: agg.devices };
+  },
+  async getUsageSeries(days = 14) {
+    const start = dayKey(Date.now() - (days - 1) * 86400000);
+    const { data: rows } = await supabase.from("usage_daily").select("day,down_bytes,up_bytes").neq("scope", "__unattributed__").gte("day", start);
+    const byDay = {};
+    for (const r of rows || []) { const e = (byDay[r.day] ??= { d: 0, u: 0 }); e.d += r.down_bytes; e.u += r.up_bytes; }
+    return Object.entries(byDay).map(([day, v]) => ({ day, down_bytes: v.d, up_bytes: v.u, total_bytes: v.d + v.u })).sort((a, b) => (a.day < b.day ? -1 : 1));
+  },
   renameDevice: async () => {}, // disabled in cloud mode
   async login(email, password) {
     const { error } = await supabase.auth.signInWithPassword({ email, password });

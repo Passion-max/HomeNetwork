@@ -129,6 +129,45 @@ export function getUsageWindows() {
   return getConsumption().windows;
 }
 
+/**
+ * Usage for one period — a day ('YYYY-MM-DD'), a month ('YYYY-MM'), or 'all' —
+ * with the general total and a per-device breakdown for that period.
+ */
+export function getUsageFor(period) {
+  let rows;
+  if (period === "all") {
+    rows = db.prepare("SELECT day, scope, kind, down_bytes, up_bytes FROM usage_daily").all();
+  } else if (/^\d{4}-\d{2}$/.test(period)) {
+    rows = db.prepare("SELECT day, scope, kind, down_bytes, up_bytes FROM usage_daily WHERE substr(day,1,7)=?").all(period);
+  } else {
+    rows = db.prepare("SELECT day, scope, kind, down_bytes, up_bytes FROM usage_daily WHERE day=?").all(period);
+  }
+  const devices = db.prepare("SELECT mac, custom_name, hostname, conn_type, port FROM device").all();
+  // aggregateConsumption rolls the passed rows into one total + per-device list.
+  const agg = aggregateConsumption(rows, devices, { today: period, month: period });
+  return {
+    period,
+    total_bytes: agg.total_bytes,
+    down_bytes: agg.down_bytes,
+    up_bytes: agg.up_bytes,
+    unattributed: agg.unattributed,
+    devices: agg.devices,
+  };
+}
+
+/** Per-day general usage totals for the last N days (oldest → newest). */
+export function getUsageSeries(days = 14) {
+  const rows = db
+    .prepare(
+      `SELECT day, SUM(down_bytes) d, SUM(up_bytes) u FROM usage_daily
+       WHERE scope != '__unattributed__' GROUP BY day ORDER BY day DESC LIMIT ?`,
+    )
+    .all(days);
+  return rows
+    .map((r) => ({ day: r.day, down_bytes: r.d, up_bytes: r.u, total_bytes: r.d + r.u }))
+    .reverse();
+}
+
 /** Per-device throughput + signal history for the device detail view. */
 export function getDeviceHistory(mac, minutes = 30) {
   const since = Date.now() - minutes * 60_000;

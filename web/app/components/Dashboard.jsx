@@ -9,6 +9,7 @@ import DeviceDetail from "./DeviceDetail";
 import SpeedTest from "./SpeedTest";
 import Login from "./Login";
 import { api, CLOUD } from "../lib/data";
+import { dayKey } from "../lib/usage";
 
 export default function Dashboard() {
   const [state, setState] = useState(null);
@@ -343,16 +344,104 @@ function DevicesView({ state, onSelect }) {
 }
 
 /* ---------------- Usage ---------------- */
+const PERIODS = [["today", "Today"], ["yesterday", "Yesterday"], ["month", "This month"], ["all", "All-time"]];
+const periodValue = (p) => {
+  const now = Date.now();
+  if (p === "today") return dayKey(now);
+  if (p === "yesterday") return dayKey(now - 86400000);
+  if (p === "month") return dayKey(now).slice(0, 7);
+  return "all";
+};
+
 function UsageView({ consumption }) {
-  const w = consumption?.windows;
-  const all = w?.all ?? { total_bytes: consumption?.total_bytes ?? 0, down_bytes: 0, up_bytes: 0 };
-  const animated = useCountUp(all.total_bytes / 1073741824); // GB
-  const boot = consumption.since_boot;
-  if (!consumption) return <div className="empty">loading usage…</div>;
+  const [period, setPeriod] = useState("today");
+  const [bd, setBd] = useState(null);        // breakdown for the selected period
+  const [series, setSeries] = useState([]);  // daily trend
+
+  useEffect(() => {
+    let stop = false;
+    api.getUsageFor(periodValue(period)).then((d) => { if (!stop) setBd(d); }).catch(() => {});
+    return () => { stop = true; };
+  }, [period]);
+
+  useEffect(() => {
+    let stop = false;
+    api.getUsageSeries(14).then((d) => { if (!stop) setSeries(Array.isArray(d) ? d : []); }).catch(() => {});
+    return () => { stop = true; };
+  }, []);
+
+  const boot = consumption?.since_boot;
+  const total = bd?.total_bytes ?? 0;
+  const devs = bd?.devices ?? [];
+  const maxDay = Math.max(1, ...series.map((s) => s.total_bytes));
+  const today = dayKey(Date.now());
+  const label = PERIODS.find((p) => p[0] === period)[1];
+
   return (
     <>
+      <div className="panel consume open reveal" style={{ marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+          {PERIODS.map(([k, lab]) => (
+            <button
+              key={k}
+              onClick={() => setPeriod(k)}
+              style={{
+                flex: "1 1 auto", padding: "8px 10px", borderRadius: 10, fontSize: 12.5, cursor: "pointer",
+                border: "1px solid var(--panel-edge)", background: period === k ? "#ffcc00" : "rgba(255,255,255,0.04)",
+                color: period === k ? "#1a1600" : "#968f7e", fontWeight: period === k ? 700 : 500,
+              }}
+            >
+              {lab}
+            </button>
+          ))}
+        </div>
+        <div className="consume-head">
+          <div className="consume-left">
+            <span className="consume-label">{label} · all devices</span>
+            <span className="consume-since">general usage</span>
+          </div>
+          <div className="consume-value mono">{(total / 1073741824).toFixed(2)} <span style={{ fontSize: "0.5em" }}>GB</span></div>
+        </div>
+        <div className="consume-detail">
+          <div className="consume-split">
+            <span className="down-c mono">↓ {fmtBytes(bd?.down_bytes ?? 0)} down</span>
+            <span className="up-c mono">↑ {fmtBytes(bd?.up_bytes ?? 0)} up</span>
+          </div>
+          <div className="consume-subhead">By device · {label.toLowerCase()}</div>
+          <div className="consume-devs">
+            {devs.length === 0 && <div className="cd-row"><span className="cd-name" style={{ color: "#5b564a" }}>No usage in this period</span></div>}
+            {devs.map((d) => (
+              <div className="cd-row" key={d.name}>
+                <span className="cd-name">{d.name}</span>
+                <span className="cd-bar"><i style={{ width: `${Math.round((d.total_bytes / (total || 1)) * 100)}%` }} /></span>
+                <span className="cd-val mono">{fmtBytes(d.total_bytes)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="panel consume open reveal" style={{ marginBottom: 12 }}>
+        <div className="consume-subhead" style={{ marginTop: 0 }}>Daily usage · last {series.length || 14} days</div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 96, padding: "6px 0" }}>
+          {series.length === 0 && <span style={{ color: "#5b564a", fontSize: 12 }}>collecting daily history…</span>}
+          {series.map((s) => (
+            <div key={s.day} title={`${s.day}: ${fmtBytes(s.total_bytes)}`}
+              style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center" }}>
+              <div style={{ width: "68%", height: Math.max(3, Math.round((s.total_bytes / maxDay) * 86)), borderRadius: "3px 3px 0 0", background: s.day === today ? "#ffcc00" : "rgba(255,204,0,0.4)" }} />
+            </div>
+          ))}
+        </div>
+        {series.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", color: "#5b564a", fontSize: 11, marginTop: 4 }}>
+            <span>{series[0].day.slice(5)}</span>
+            <span>{series[series.length - 1].day.slice(5)}</span>
+          </div>
+        )}
+      </div>
+
       {boot && (
-        <div className="panel consume open reveal" style={{ marginBottom: 12 }}>
+        <div className="panel consume open reveal">
           <div className="consume-head">
             <div className="consume-left">
               <span className="consume-label">Metered by router</span>
@@ -360,52 +449,8 @@ function UsageView({ consumption }) {
             </div>
             <div className="consume-value mono">{(boot.total_bytes / 1073741824).toFixed(2)} <span style={{ fontSize: "0.5em" }}>GB</span></div>
           </div>
-          <div className="consume-detail">
-            <div className="consume-split">
-              <span className="down-c mono">↓ {fmtBytes(boot.down_bytes)} down</span>
-              <span className="up-c mono">↑ {fmtBytes(boot.up_bytes)} up</span>
-            </div>
-            <div className="usage-windows">
-              <WinStat label="Wired" v={fmtBytes(boot.wired_bytes)} />
-              <WinStat label="Wi-Fi" v={fmtBytes(boot.wifi_bytes)} />
-            </div>
-          </div>
         </div>
       )}
-      <div className="panel consume open reveal">
-        <div className="consume-head">
-          <div className="consume-left">
-            <span className="consume-label">Tracked by dashboard</span>
-            <span className="consume-since">
-              since {consumption.since_ts ? new Date(consumption.since_ts).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "tracking began"}
-            </span>
-          </div>
-          <div className="consume-value mono">{animated.toFixed(2)} <span style={{ fontSize: "0.5em" }}>GB</span></div>
-        </div>
-        <div className="consume-detail">
-          <div className="consume-split">
-            <span className="down-c mono">↓ {fmtBytes(all.down_bytes)} down</span>
-            <span className="up-c mono">↑ {fmtBytes(all.up_bytes)} up</span>
-          </div>
-          {w && (
-            <div className="usage-windows">
-              <WinStat label="Today" v={fmtBytes(w.today.total_bytes)} />
-              <WinStat label="This month" v={fmtBytes(w.month.total_bytes)} />
-              <WinStat label="All-time" v={fmtBytes(w.all.total_bytes)} />
-            </div>
-          )}
-          <div className="consume-subhead">By device</div>
-          <div className="consume-devs">
-            {consumption.devices.map((d) => (
-              <div className="cd-row" key={d.name}>
-                <span className="cd-name">{d.name}</span>
-                <span className="cd-bar"><i style={{ width: `${Math.round((d.total_bytes / (consumption.total_bytes || 1)) * 100)}%` }} /></span>
-                <span className="cd-val mono">{fmtBytes(d.total_bytes)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
     </>
   );
 }
