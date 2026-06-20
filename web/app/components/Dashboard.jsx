@@ -11,6 +11,11 @@ import Login from "./Login";
 import { api, CLOUD } from "../lib/data";
 import { dayKey } from "../lib/usage";
 
+// Privacy mode: replace real device names with stable anonymous labels for
+// screenshots (e.g. "Device 47"), without leaking people's names.
+const dnHash = (s) => { let h = 0; for (let i = 0; i < String(s).length; i++) h = (h * 31 + String(s).charCodeAt(i)) >>> 0; return 10 + (h % 89); };
+const maskName = (name, on) => (on ? "Device " + dnHash(name) : name);
+
 export default function Dashboard() {
   const [state, setState] = useState(null);
   const [history, setHistory] = useState([]);
@@ -21,6 +26,7 @@ export default function Dashboard() {
   const [live, setLive] = useState(false);
   const [authRequired, setAuthRequired] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0); // bump to re-pull after rename/login
+  const [privacy, setPrivacy] = useState(false);   // mask device names (+ IP) for screenshots
 
   // Live state — same-origin polling (works on PC and phone alike).
   useEffect(() => {
@@ -102,6 +108,11 @@ export default function Dashboard() {
               <span className={`dot ${healthy ? "live" : "off"}`} />
               {chipLabel}
             </div>
+            <button className="logout-btn" onClick={() => setPrivacy((p) => !p)}
+              title={privacy ? "Show device names" : "Privacy mode: hide device names & IP"}
+              aria-label="Toggle privacy mode" style={privacy ? { color: "var(--mtn)", borderColor: "var(--panel-edge-strong)" } : null}>
+              {privacy ? <EyeOff /> : <Eye />}
+            </button>
             {(state.auth_enabled || CLOUD) && (
               <button className="logout-btn" onClick={logout} title="Sign out" aria-label="Sign out">⏻</button>
             )}
@@ -110,12 +121,12 @@ export default function Dashboard() {
 
         {tab === "home" && (
           <HomeView
-            state={state} consumption={consumption} history={history}
+            state={state} consumption={consumption} history={history} privacy={privacy}
             rangeMin={rangeMin} setRangeMin={setRangeMin} setTab={setTab} onSelect={setSelected}
           />
         )}
-        {tab === "devices" && <DevicesView state={state} onSelect={setSelected} />}
-        {tab === "usage" && <UsageView consumption={consumption} state={state} />}
+        {tab === "devices" && <DevicesView state={state} onSelect={setSelected} privacy={privacy} />}
+        {tab === "usage" && <UsageView consumption={consumption} state={state} privacy={privacy} />}
         {tab === "health" && <HealthView state={state} />}
       </main>
 
@@ -124,6 +135,7 @@ export default function Dashboard() {
       {selected && (
         <DeviceDetail
           device={selected}
+          privacy={privacy}
           onClose={() => setSelected(null)}
           onRenamed={() => setRefreshKey((k) => k + 1)}
         />
@@ -135,7 +147,7 @@ export default function Dashboard() {
 /* ---------------- Home ---------------- */
 const WIN_LABELS = { today: "Today", month: "Month", all: "All-time" };
 
-function HomeView({ state, consumption, history, rangeMin, setRangeMin, setTab, onSelect }) {
+function HomeView({ state, consumption, history, rangeMin, setRangeMin, setTab, onSelect, privacy }) {
   const { system, wan, totals, devices } = state;
   const [win, setWin] = useState("today");
   const [maskIp, setMaskIp] = useState(false);
@@ -210,9 +222,9 @@ function HomeView({ state, consumption, history, rangeMin, setRangeMin, setTab, 
           <div className="statrow">
             <span className="k">Public IP</span>
             <span className="v mono ip-cell">
-              {maskIp ? "•••.•••.•••.•••" : wan.ip ?? "—"}
+              {maskIp || privacy ? "•••.•••.•••.•••" : wan.ip ?? "—"}
               <button className="ip-toggle" onClick={() => setMaskIp((m) => !m)} aria-label={maskIp ? "Show IP" : "Hide IP"}>
-                {maskIp ? <EyeOff /> : <Eye />}
+                {maskIp || privacy ? <EyeOff /> : <Eye />}
               </button>
             </span>
           </div>
@@ -249,7 +261,7 @@ function HomeView({ state, consumption, history, rangeMin, setRangeMin, setTab, 
         {devices.map((d) => (
           <button className="devrow" key={d.mac} onClick={() => onSelect(d)}>
             <span className={`pip ${d.conn_type}`} />
-            <span className="dr-name">{d.name}</span>
+            <span className="dr-name">{maskName(d.name, privacy)}</span>
             <span className="dr-type">{d.conn_type === "wifi" ? "Wi-Fi" : "LAN"}</span>
             <span className="dr-speed mono"><span className="down-c">↓{fmtSpeed(d.down_kbps)}</span> <span className="up-c">↑{fmtSpeed(d.up_kbps)}</span></span>
           </button>
@@ -275,7 +287,7 @@ function EyeOff() {
 }
 
 /* ---------------- Devices ---------------- */
-function DevicesView({ state, onSelect }) {
+function DevicesView({ state, onSelect, privacy }) {
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState("traffic");
 
@@ -320,7 +332,7 @@ function DevicesView({ state, onSelect }) {
           <button className="panel dev reveal" key={d.mac} style={{ animationDelay: `${i * 45}ms` }} onClick={() => onSelect(d)}>
             <div className="head">
               <div>
-                <div className="name">{d.name}</div>
+                <div className="name">{maskName(d.name, privacy)}</div>
                 <div className="sub">{d.conn_type === "wifi" ? d.ssid : "Wired"} · <span className="ip">{d.ip ?? "—"}</span></div>
               </div>
               <span className={`badge ${d.conn_type}`}>{d.conn_type === "wifi" ? `Wi-Fi ${d.band ?? ""}` : "LAN"}</span>
@@ -360,7 +372,7 @@ const chipStyle = (on) => ({
   color: on ? "#1a1600" : "#968f7e", fontWeight: on ? 700 : 500,
 });
 
-function UsageView({ consumption }) {
+function UsageView({ consumption, privacy }) {
   // `sel` is either a preset key (today/yesterday/month/all) or a 'YYYY-MM-DD' day.
   const [sel, setSel] = useState("today");
   const [bd, setBd] = useState(null);
@@ -418,7 +430,7 @@ function UsageView({ consumption }) {
             {bd && devs.length === 0 && <div className="cd-row"><span className="cd-name" style={{ color: "#5b564a" }}>No usage recorded for this period</span></div>}
             {devs.map((d) => (
               <div className="cd-row" key={d.name}>
-                <span className="cd-name">{d.name}</span>
+                <span className="cd-name">{maskName(d.name, privacy)}</span>
                 <span className="cd-bar"><i style={{ width: `${Math.round((d.total_bytes / (total || 1)) * 100)}%` }} /></span>
                 <span className="cd-val mono">{fmtBytes(d.total_bytes)}</span>
               </div>
@@ -436,7 +448,7 @@ function UsageView({ consumption }) {
             return (
               <button key={s.day} onClick={() => setSel(s.day)} title={`${dayLabel(s.day)}: ${fmtBytes(s.total_bytes)}`}
                 style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", height: "100%", padding: 0, border: "none", background: "none", cursor: "pointer" }}>
-                <div style={{ width: "72%", height: Math.max(3, Math.round((s.total_bytes / maxDay) * 84)), borderRadius: "3px 3px 0 0", background: on ? "#ffcc00" : (s.day === today ? "rgba(255,204,0,0.7)" : "rgba(255,204,0,0.32)") }} />
+                <div style={{ width: "72%", height: Math.max(3, Math.round((s.total_bytes / maxDay) * 84)), borderRadius: "3px 3px 0 0", background: on ? "#ffcc00" : (s.day === today ? "rgba(255,204,0,0.85)" : "rgba(255,204,0,0.55)") }} />
               </button>
             );
           })}

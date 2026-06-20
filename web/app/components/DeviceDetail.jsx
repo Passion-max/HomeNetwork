@@ -5,7 +5,9 @@ import Sparkline from "./Sparkline";
 import Signal from "./Signal";
 import { api } from "../lib/data";
 
-export default function DeviceDetail({ device, onClose, onRenamed }) {
+const dnHash = (s) => { let h = 0; for (let i = 0; i < String(s).length; i++) h = (h * 31 + String(s).charCodeAt(i)) >>> 0; return 10 + (h % 89); };
+
+export default function DeviceDetail({ device, onClose, onRenamed, privacy }) {
   const [history, setHistory] = useState([]);
   const [name, setName] = useState(device.name);
   const [saving, setSaving] = useState(false);
@@ -30,8 +32,8 @@ export default function DeviceDetail({ device, onClose, onRenamed }) {
         <div className="sheet-grip" />
         <div className="sheet-head">
           <div>
-            <div className="sheet-title">{device.name}</div>
-            <div className="sheet-sub mono">{device.ip ?? "—"} · {device.mac}</div>
+            <div className="sheet-title">{privacy ? "Device " + dnHash(device.name) : device.name}</div>
+            <div className="sheet-sub mono">{privacy ? "•••" : `${device.ip ?? "—"} · ${device.mac}`}</div>
           </div>
           <span className={`badge ${device.conn_type}`}>
             {device.conn_type === "wifi" ? `Wi-Fi ${device.band ?? ""}` : "LAN"}
