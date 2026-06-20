@@ -352,21 +352,32 @@ const periodValue = (p) => {
   if (p === "month") return dayKey(now).slice(0, 7);
   return "all";
 };
+const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+const dayLabel = (d) => new Date(d + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+const chipStyle = (on) => ({
+  flex: "1 1 auto", padding: "8px 10px", borderRadius: 10, fontSize: 12.5, cursor: "pointer",
+  border: "1px solid var(--panel-edge)", background: on ? "#ffcc00" : "rgba(255,255,255,0.04)",
+  color: on ? "#1a1600" : "#968f7e", fontWeight: on ? 700 : 500,
+});
 
 function UsageView({ consumption }) {
-  const [period, setPeriod] = useState("today");
-  const [bd, setBd] = useState(null);        // breakdown for the selected period
-  const [series, setSeries] = useState([]);  // daily trend
+  // `sel` is either a preset key (today/yesterday/month/all) or a 'YYYY-MM-DD' day.
+  const [sel, setSel] = useState("today");
+  const [bd, setBd] = useState(null);
+  const [series, setSeries] = useState([]);
+  const today = dayKey(Date.now());
+  const apiPeriod = PERIODS.some((p) => p[0] === sel) ? periodValue(sel) : sel;
 
   useEffect(() => {
     let stop = false;
-    api.getUsageFor(periodValue(period)).then((d) => { if (!stop) setBd(d); }).catch(() => {});
+    setBd(null);
+    api.getUsageFor(apiPeriod).then((d) => { if (!stop) setBd(d); }).catch(() => {});
     return () => { stop = true; };
-  }, [period]);
+  }, [apiPeriod]);
 
   useEffect(() => {
     let stop = false;
-    api.getUsageSeries(14).then((d) => { if (!stop) setSeries(Array.isArray(d) ? d : []); }).catch(() => {});
+    api.getUsageSeries(30).then((d) => { if (!stop) setSeries(Array.isArray(d) ? d : []); }).catch(() => {});
     return () => { stop = true; };
   }, []);
 
@@ -374,26 +385,21 @@ function UsageView({ consumption }) {
   const total = bd?.total_bytes ?? 0;
   const devs = bd?.devices ?? [];
   const maxDay = Math.max(1, ...series.map((s) => s.total_bytes));
-  const today = dayKey(Date.now());
-  const label = PERIODS.find((p) => p[0] === period)[1];
+  const label = isDay(sel) ? dayLabel(sel) : PERIODS.find((p) => p[0] === sel)[1];
 
   return (
     <>
       <div className="panel consume open reveal" style={{ marginBottom: 12 }}>
-        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
           {PERIODS.map(([k, lab]) => (
-            <button
-              key={k}
-              onClick={() => setPeriod(k)}
-              style={{
-                flex: "1 1 auto", padding: "8px 10px", borderRadius: 10, fontSize: 12.5, cursor: "pointer",
-                border: "1px solid var(--panel-edge)", background: period === k ? "#ffcc00" : "rgba(255,255,255,0.04)",
-                color: period === k ? "#1a1600" : "#968f7e", fontWeight: period === k ? 700 : 500,
-              }}
-            >
-              {lab}
-            </button>
+            <button key={k} onClick={() => setSel(k)} style={chipStyle(sel === k)}>{lab}</button>
           ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+          <span style={{ fontSize: 12, color: "#968f7e" }}>Jump to a day:</span>
+          <input type="date" max={today} value={isDay(sel) ? sel : ""}
+            onChange={(e) => e.target.value && setSel(e.target.value)}
+            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid var(--panel-edge)", borderRadius: 10, color: "#f4f1e8", padding: "6px 10px", fontSize: 12.5, colorScheme: "dark" }} />
         </div>
         <div className="consume-head">
           <div className="consume-left">
@@ -409,7 +415,7 @@ function UsageView({ consumption }) {
           </div>
           <div className="consume-subhead">By device · {label.toLowerCase()}</div>
           <div className="consume-devs">
-            {devs.length === 0 && <div className="cd-row"><span className="cd-name" style={{ color: "#5b564a" }}>No usage in this period</span></div>}
+            {bd && devs.length === 0 && <div className="cd-row"><span className="cd-name" style={{ color: "#5b564a" }}>No usage recorded for this period</span></div>}
             {devs.map((d) => (
               <div className="cd-row" key={d.name}>
                 <span className="cd-name">{d.name}</span>
@@ -422,15 +428,18 @@ function UsageView({ consumption }) {
       </div>
 
       <div className="panel consume open reveal" style={{ marginBottom: 12 }}>
-        <div className="consume-subhead" style={{ marginTop: 0 }}>Daily usage · last {series.length || 14} days</div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 96, padding: "6px 0" }}>
+        <div className="consume-subhead" style={{ marginTop: 0 }}>Daily usage · tap a bar to view that day</div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 100, padding: "6px 0" }}>
           {series.length === 0 && <span style={{ color: "#5b564a", fontSize: 12 }}>collecting daily history…</span>}
-          {series.map((s) => (
-            <div key={s.day} title={`${s.day}: ${fmtBytes(s.total_bytes)}`}
-              style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center" }}>
-              <div style={{ width: "68%", height: Math.max(3, Math.round((s.total_bytes / maxDay) * 86)), borderRadius: "3px 3px 0 0", background: s.day === today ? "#ffcc00" : "rgba(255,204,0,0.4)" }} />
-            </div>
-          ))}
+          {series.map((s) => {
+            const on = s.day === sel;
+            return (
+              <button key={s.day} onClick={() => setSel(s.day)} title={`${dayLabel(s.day)}: ${fmtBytes(s.total_bytes)}`}
+                style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", height: "100%", padding: 0, border: "none", background: "none", cursor: "pointer" }}>
+                <div style={{ width: "72%", height: Math.max(3, Math.round((s.total_bytes / maxDay) * 84)), borderRadius: "3px 3px 0 0", background: on ? "#ffcc00" : (s.day === today ? "rgba(255,204,0,0.7)" : "rgba(255,204,0,0.32)") }} />
+              </button>
+            );
+          })}
         </div>
         {series.length > 0 && (
           <div style={{ display: "flex", justifyContent: "space-between", color: "#5b564a", fontSize: 11, marginTop: 4 }}>
