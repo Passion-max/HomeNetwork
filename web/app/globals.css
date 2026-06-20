@@ -194,7 +194,7 @@ body {
 }
 
 /* ---------- hero gauge ---------- */
-.hero { padding: 30px 24px 26px; display: flex; flex-direction: column; align-items: center; }
+.hero { padding: 22px 24px 22px; display: flex; flex-direction: column; align-items: center; }
 .gauge-wrap { position: relative; width: 248px; height: 248px; }
 .gauge-readout {
   position: absolute; inset: 0; display: flex; flex-direction: column;
@@ -206,7 +206,7 @@ body {
 .gauge-readout .ctx.testing { color: var(--mtn); animation: pulse 1.4s ease-in-out infinite; }
 
 .duplex {
-  display: flex; gap: 26px; margin-top: 22px;
+  display: flex; gap: 26px; margin-top: -28px; /* tuck into the gauge's open bottom arc */
 }
 .duplex .leg { display: flex; align-items: center; gap: 9px; }
 .duplex .arrow { font-size: 15px; }
