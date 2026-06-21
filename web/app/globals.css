@@ -109,12 +109,13 @@ body {
 .pip { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .pip.wifi { background: var(--mtn); box-shadow: 0 0 8px rgba(255,204,0,0.5); }
 .pip.lan { background: var(--up); box-shadow: 0 0 8px rgba(79,176,255,0.5); }
-.dr-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dr-type { font-size: 10px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.08em; }
-.dr-speed { margin-left: auto; font-size: 12px; white-space: nowrap; }
+.dr-name { flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dr-type { flex: none; font-size: 10px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
+.dr-speed { flex: none; margin-left: auto; font-size: 12px; white-space: nowrap; }
 
 /* WiFi band badge (2.4G / 5G) */
 .band {
+  flex: none;
   font-size: 9px; font-weight: 700; letter-spacing: 0.03em; line-height: 1;
   padding: 3px 6px; border-radius: 6px; white-space: nowrap;
 }
