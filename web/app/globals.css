@@ -113,6 +113,14 @@ body {
 .dr-type { font-size: 10px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: 0.08em; }
 .dr-speed { margin-left: auto; font-size: 12px; white-space: nowrap; }
 
+/* WiFi band badge (2.4G / 5G) */
+.band {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.03em; line-height: 1;
+  padding: 3px 6px; border-radius: 6px; white-space: nowrap;
+}
+.band.b24 { color: #ffcc00; background: rgba(255, 204, 0, 0.12); border: 1px solid rgba(255, 204, 0, 0.32); }
+.band.b5  { color: #4fb0ff; background: rgba(79, 176, 255, 0.12); border: 1px solid rgba(79, 176, 255, 0.32); }
+
 /* ---------- filter bar (devices) ---------- */
 .filterbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
 .chips { display: inline-flex; gap: 7px; }

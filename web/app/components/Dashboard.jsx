@@ -16,6 +16,12 @@ import { dayKey } from "../lib/usage";
 const dnHash = (s) => { let h = 0; for (let i = 0; i < String(s).length; i++) h = (h * 31 + String(s).charCodeAt(i)) >>> 0; return 10 + (h % 89); };
 const maskName = (name, on) => (on ? "Device " + dnHash(name) : name);
 
+// 2.4G / 5G band badge, themed (amber for 2.4, blue for 5).
+function Band({ ghz }) {
+  if (!ghz) return null;
+  return <span className={`band ${ghz === "5" ? "b5" : "b24"}`}>{ghz === "5" ? "5G" : "2.4G"}</span>;
+}
+
 export default function Dashboard() {
   const [state, setState] = useState(null);
   const [history, setHistory] = useState([]);
@@ -263,6 +269,7 @@ function HomeView({ state, consumption, history, rangeMin, setRangeMin, setTab, 
             <span className={`pip ${d.conn_type}`} />
             <span className="dr-name">{maskName(d.name, privacy)}</span>
             <span className="dr-type">{d.conn_type === "wifi" ? "Wi-Fi" : "LAN"}</span>
+            {d.conn_type === "wifi" && <Band ghz={d.band_ghz} />}
             <span className="dr-speed mono"><span className="down-c">↓{fmtSpeed(d.down_kbps)}</span> <span className="up-c">↑{fmtSpeed(d.up_kbps)}</span></span>
           </button>
         ))}
@@ -335,7 +342,10 @@ function DevicesView({ state, onSelect, privacy }) {
                 <div className="name">{maskName(d.name, privacy)}</div>
                 <div className="sub">{d.conn_type === "wifi" ? d.ssid : "Wired"} · <span className="ip">{d.ip ?? "—"}</span></div>
               </div>
-              <span className={`badge ${d.conn_type}`}>{d.conn_type === "wifi" ? `Wi-Fi ${d.band ?? ""}` : "LAN"}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span className={`badge ${d.conn_type}`}>{d.conn_type === "wifi" ? "Wi-Fi" : "LAN"}</span>
+                {d.conn_type === "wifi" && <Band ghz={d.band_ghz} />}
+              </span>
             </div>
             <div className="head" style={{ alignItems: "center" }}>
               <div className="speeds">

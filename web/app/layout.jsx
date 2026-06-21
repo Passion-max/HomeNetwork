@@ -17,6 +17,11 @@ export const metadata = {
   description: "MTN FibreX network telemetry & control",
   manifest: "/manifest.json",
   appleWebApp: { capable: true, statusBarStyle: "black-translucent", title: "FibreX" },
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    shortcut: "/icon.svg",
+    apple: "/fiberx.png",
+  },
 };
 
 export const viewport = {

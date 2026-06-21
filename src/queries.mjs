@@ -11,6 +11,17 @@ const twoLatestTs = () =>
 const kbps = (cur, prev, dtMs) =>
   cur == null || prev == null || !dtMs || cur < prev ? 0 : Math.round(((cur - prev) * 8) / (dtMs / 1000) / 1000);
 
+/** Best-effort 2.4 vs 5 GHz: from the SSID's band suffix, then channel width. */
+const bandGhz = (ssid, width) => {
+  const t = (ssid || "").trim();
+  if (/5\s*g?$/i.test(t)) return "5";
+  if (/2(\.4)?\s*g?$/i.test(t)) return "2.4";
+  const w = parseInt(width, 10);
+  if (w >= 40) return "5";
+  if (w > 0) return "2.4";
+  return null;
+};
+
 /** Today's usage per scope (mac or 'DEV.ETH.IFx') from the unified ledger. */
 function todayUsageByScope() {
   const day = dayKey(Date.now());
@@ -71,6 +82,7 @@ export function getState() {
       conn_type: s.conn_type,
       ssid: s.ssid,
       band: s.band,
+      band_ghz: s.conn_type === "wifi" ? bandGhz(s.ssid, s.band) : null,
       rssi: s.rssi,
       snr: s.snr,
       signal: signalLabel(s.rssi),
