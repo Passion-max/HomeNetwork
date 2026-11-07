@@ -1,17 +1,26 @@
 "use client";
+import { memo } from "react";
+
+// Memoized: skips re-render when `points` is the same array (e.g. 5s state polls
+// that don't change the 15s history).
+export default memo(Sparkline);
 
 // Dual-area throughput chart (download mint + upload ice-blue).
 // Uses a percentile-based scale so a single spike doesn't flatten everyday
 // traffic into an invisible line at the bottom.
-export default function Sparkline({ points = [], height = 120 }) {
+function Sparkline({ points = [], height = 120 }) {
   const W = 600;
   const H = height;
 
   // Keep only points with finite numeric values so a stray null can never
   // produce a NaN in the SVG path (which silently blanks the whole chart).
-  const data = (points ?? []).filter(
+  const clean = (points ?? []).filter(
     (p) => Number.isFinite(p?.down_kbps) && Number.isFinite(p?.up_kbps),
   );
+  // Downsample wide ranges (e.g. 7d ≈ 10k points) so the SVG path stays light.
+  const MAX_PTS = 180;
+  const step = clean.length > MAX_PTS ? Math.ceil(clean.length / MAX_PTS) : 1;
+  const data = step > 1 ? clean.filter((_, i) => i % step === 0 || i === clean.length - 1) : clean;
 
   if (data.length < 2) {
     return (

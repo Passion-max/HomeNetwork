@@ -1,9 +1,13 @@
 "use client";
+import { memo } from "react";
+
+// Memoized so a 5s state poll with unchanged throughput skips the SVG re-render.
+export default memo(Gauge);
 
 // Concentric throughput rings — outer = download (yellow), inner = upload (blue).
 // When `overrideMbps` is set (during a speed test) the gauge shows that single
 // value fast.com-style, filling only the active ring.
-export default function Gauge({
+function Gauge({
   downKbps = 0, upKbps = 0, capMbps = 120,
   overrideMbps = null, overrideKind = null, label = "live throughput", unit = "Mbps total",
 }) {

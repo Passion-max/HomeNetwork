@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, normalize, extname } from "node:path";
 import { pollOnce } from "./poller.mjs";
-import { saveSnapshot } from "./db.mjs";
+import { saveSnapshot, pruneOldSamples } from "./db.mjs";
 import { store } from "./store/index.mjs";
 import { startSync, syncEnabled } from "./sync/supabase.mjs";
 import { routerConfigured, saveRouter } from "./config.mjs";
@@ -38,6 +38,7 @@ async function tick() {
     health.last_error = null;
     health.consecutive_failures = 0;
     const state = await store.getState();
+    if (state) { state.collector = collectorHealth(state); state.auth_enabled = authEnabled(); }
     const payload = `data: ${JSON.stringify(state)}\n\n`;
     for (const res of sseClients) res.write(payload);
     process.stdout.write(
@@ -235,7 +236,7 @@ const server = createServer(async (req, res) => {
       Connection: "keep-alive",
     });
     const s = await store.getState();
-    if (s) res.write(`data: ${JSON.stringify(s)}\n\n`);
+    if (s) { s.collector = collectorHealth(s); s.auth_enabled = authEnabled(); res.write(`data: ${JSON.stringify(s)}\n\n`); }
     sseClients.add(res);
     req.on("close", () => sseClients.delete(res));
     return;
@@ -260,4 +261,9 @@ server.listen(PORT, () => {
   if (!routerConfigured()) console.log(`\n→ Open http://localhost:${PORT} and enter your router password to finish setup.\n`);
   tick();
   setInterval(tick, INTERVAL_MS);
+  // Keep the DB bounded: prune old raw samples once a day.
+  setInterval(() => {
+    try { const n = pruneOldSamples(); if (n) console.log(`\n[db] daily prune: removed ${n.toLocaleString()} old sample rows`); }
+    catch (e) { console.error("[db] daily prune failed:", e.message); }
+  }, 24 * 3600 * 1000);
 });

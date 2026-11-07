@@ -169,12 +169,38 @@ export function setDeviceName(mac, name) {
   stmtRename.run(name && name.trim() ? name.trim() : null, mac);
 }
 
+const SAMPLE_RETENTION_DAYS = Number(process.env.SAMPLE_RETENTION_DAYS ?? 14);
+/**
+ * Delete raw high-frequency samples older than `days`. The unified usage ledger
+ * (`usage_daily`) already holds the permanent all-time aggregates, and live speed
+ * + charts only read recent rows (latest 2 / last ~7d / last 30min), so this
+ * bounds DB growth (device_sample + port_sample grow ~4 MB/day otherwise).
+ * Leaves usage_daily / scope_state / device untouched. Run VACUUM once after the
+ * first big prune to reclaim the file on disk (space is otherwise reused in place).
+ */
+export function pruneOldSamples(days = SAMPLE_RETENTION_DAYS) {
+  const cutoff = Date.now() - days * 86400000;
+  let removed = 0;
+  for (const t of ["device_sample", "port_sample", "snapshot"]) {
+    removed += db.prepare(`DELETE FROM ${t} WHERE ts < ?`).run(cutoff).changes;
+  }
+  return removed;
+}
+
 // One-time: rebuild the ledger from existing raw samples with the fixed
 // bounded-delta logic (removes the historical inflation). No-op after first run.
 try {
   if (backfill(db)) console.log("[ledger] backfilled usage_daily from history");
 } catch (e) {
   console.error("[ledger] backfill failed:", e.message);
+}
+
+// Keep the DB bounded: prune old raw samples on startup (server.mjs also runs it daily).
+try {
+  const removed = pruneOldSamples();
+  if (removed) console.log(`[db] pruned ${removed.toLocaleString()} raw sample rows older than ${SAMPLE_RETENTION_DAYS}d`);
+} catch (e) {
+  console.error("[db] prune failed:", e.message);
 }
 
 export { db };

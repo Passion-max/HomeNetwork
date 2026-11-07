@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, memo } from "react";
 import Gauge from "./Gauge";
 import Signal from "./Signal";
 import Sparkline from "./Sparkline";
@@ -34,21 +34,37 @@ export default function Dashboard() {
   const [refreshKey, setRefreshKey] = useState(0); // bump to re-pull after rename/login
   const [privacy, setPrivacy] = useState(false);   // mask device names (+ IP) for screenshots
 
-  // Live state — same-origin polling (works on PC and phone alike).
+  // Live state. Local backend pushes via SSE (updates land exactly when a new
+  // snapshot arrives — no redundant 5s polls). The hosted (cloud) build has no
+  // SSE endpoint, so it polls Supabase.
   useEffect(() => {
-    let stop = false;
-    const poll = async () => {
-      try {
-        const data = await api.getState();
-        if (!stop && data?.ts) { setAuthRequired(false); setState(data); setLive(true); }
-        else if (!stop) setLive(false);
-      } catch (e) {
-        if (!stop) { if (e?.code === 401) { setAuthRequired(true); } setLive(false); }
-      }
+    let stop = false, es = null, timer = null;
+    const apply = (d) => { if (stop || !d?.ts) return false; setAuthRequired(false); setState(d); setLive(true); return true; };
+    const onUnauth = () => { if (!stop) { setAuthRequired(true); setLive(false); } };
+    const pollOnce = async () => {
+      try { if (!apply(await api.getState()) && !stop) setLive(false); }
+      catch (e) { if (e?.code === 401) onUnauth(); else if (!stop) setLive(false); }
     };
-    poll();
-    const t = setInterval(poll, 5000);
-    return () => { stop = true; clearInterval(t); };
+
+    if (CLOUD) {
+      pollOnce();
+      timer = setInterval(pollOnce, 5000);
+    } else {
+      // One fetch first (SSE can't surface a 401 cleanly) to detect auth + seed,
+      // then open the event stream for live push, with manual reconnect.
+      (async () => {
+        try { apply(await api.getState()); }
+        catch (e) { if (e?.code === 401) return onUnauth(); }
+        if (stop) return;
+        const open = () => {
+          es = new EventSource("/api/stream");
+          es.onmessage = (ev) => { try { apply(JSON.parse(ev.data)); } catch {} };
+          es.onerror = () => { if (es) { es.close(); es = null; } if (!stop) { setLive(false); timer = setTimeout(open, 3000); } };
+        };
+        open();
+      })();
+    }
+    return () => { stop = true; if (es) es.close(); if (timer) { clearInterval(timer); clearTimeout(timer); } };
   }, [refreshKey]);
 
   const logout = async () => {
@@ -181,7 +197,6 @@ function HomeView({ state, consumption, history, rangeMin, setRangeMin, setTab, 
   const legUpKbps = test ? (testingUp ? test.mbps : test.phase === "done" ? test.upMbps ?? 0 : 0) * 1000 : totals.up_kbps;
   const windows = consumption?.windows;
   const sel = windows?.[win];
-  const animated = useCountUp(sel ? sel.total_bytes / 1073741824 : 0);
 
   return (
     <>
@@ -203,7 +218,7 @@ function HomeView({ state, consumption, history, rangeMin, setRangeMin, setTab, 
             ))}
           </div>
         </div>
-        <div className="uh-value mono">{sel ? animated.toFixed(2) : "—"} <span className="uh-unit">GB</span></div>
+        <div className="uh-value mono">{sel ? <CountUp value={sel.total_bytes / 1073741824} digits={2} /> : "—"} <span className="uh-unit">GB</span></div>
         {sel && (
           <div className="uh-split mono">
             <span className="down-c">↓ {fmtBytes(sel.down_bytes)}</span>
@@ -524,12 +539,19 @@ function Row({ k, v, accent }) {
   return <div className="statrow"><span className="k">{k}</span><span className={`v ${accent ? "accent" : ""}`}>{v}</span></div>;
 }
 
+// Leaf component: the per-frame count-up re-renders only this number, not the
+// whole view that holds it (big win — the value animates ~60fps for 700ms).
+const CountUp = memo(function CountUp({ value, digits = 2 }) {
+  return useCountUp(value).toFixed(digits);
+});
+
 function useCountUp(target, duration = 700) {
   const [val, setVal] = useState(0);
   const from = useRef(0);
   useEffect(() => {
-    const start = performance.now();
     const a = from.current, b = target;
+    if (Math.abs(b - a) < 0.005) { from.current = b; setVal(b); return; } // skip tiny deltas → no rAF storm
+    const start = performance.now();
     let raf;
     const tick = (t) => {
       const p = Math.min(1, (t - start) / duration);
